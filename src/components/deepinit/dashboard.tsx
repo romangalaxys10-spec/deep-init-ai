@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useDeepInit } from "@/lib/store";
 import type { ActivityEvent } from "@/lib/types";
+import { useT } from "@/lib/i18n";
 import {
   Activity,
   Cable,
@@ -35,17 +36,18 @@ import { BrainsPanel, ToolsPanel } from "./dashboard-panels";
 import { InstancesPanel } from "./instances-panel";
 import { GatewayPanel, WhitelistPanel } from "./channels-ops";
 import { TelegramCard } from "./wizard";
+import { LangSwitch } from "./lang-switch";
 
 type Tab = "overview" | "console" | "channels" | "brains" | "tools" | "instances" | "activity";
 
-const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { id: "overview", label: "overview", icon: HeartPulse },
-  { id: "console", label: "console", icon: TerminalSquare },
-  { id: "channels", label: "channels", icon: MessageCircle },
-  { id: "brains", label: "brains", icon: Cable },
-  { id: "tools", label: "tools · mcp", icon: Wrench },
-  { id: "instances", label: "instances", icon: MonitorSmartphone },
-  { id: "activity", label: "activity", icon: Activity },
+const TABS: { id: Tab; icon: React.ComponentType<{ className?: string }> }[] = [
+  { id: "overview", icon: HeartPulse },
+  { id: "console", icon: TerminalSquare },
+  { id: "channels", icon: MessageCircle },
+  { id: "brains", icon: Cable },
+  { id: "tools", icon: Wrench },
+  { id: "instances", icon: MonitorSmartphone },
+  { id: "activity", icon: Activity },
 ];
 
 const LOOP_TASKS = [
@@ -93,6 +95,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const logActivity = useDeepInit((s) => s.logActivity);
   const resetAll = useDeepInit((s) => s.resetAll);
   const setView = useDeepInit((s) => s.setView);
+  const t = useT();
 
   const [tab, setTab] = useState<Tab>("overview");
   const [now, setNow] = useState(() => Date.now());
@@ -146,8 +149,9 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
           </div>
           <div className="flex items-center gap-3">
             <span className="hidden items-center gap-2 font-mono text-[11px] text-muted-foreground md:inline-flex">
-              <StatusDot ok /> active · up <span className="text-foreground">{uptime}</span>
+              <StatusDot ok /> {t("dash.activeUp", { uptime })}
             </span>
+            <LangSwitch />
             <Button
               variant="outline"
               size="sm"
@@ -155,25 +159,23 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               onClick={onLogout}
               aria-label="Log out of the portal"
             >
-              <LogOut className="mr-1.5 h-3.5 w-3.5" /> Lock
+              <LogOut className="mr-1.5 h-3.5 w-3.5" /> {t("act.lock")}
             </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="outline" size="sm" className="font-mono text-xs">
-                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reset
+                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> {t("act.reset")}
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Factory reset the agent?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Wipes the operator profile, channels, provider chain, tools and memory on this device. The agent will need to be initialized again.
-                  </AlertDialogDescription>
+                  <AlertDialogTitle>{t("dash.resetTitle")}</AlertDialogTitle>
+                  <AlertDialogDescription>{t("dash.resetBody")}</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Keep it running</AlertDialogCancel>
+                  <AlertDialogCancel>{t("dash.resetCancel")}</AlertDialogCancel>
                   <AlertDialogAction onClick={resetAll} className="font-mono">
-                    Wipe & restart
+                    {t("dash.resetConfirm")}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -184,19 +186,19 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         {/* tabs */}
         <div className="mx-auto max-w-7xl overflow-x-auto px-4 sm:px-6">
           <nav className="flex gap-1 pb-px" aria-label="Dashboard sections">
-            {TABS.map((t) => (
+            {TABS.map((tb) => (
               <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                aria-current={tab === t.id ? "page" : undefined}
+                key={tb.id}
+                onClick={() => setTab(tb.id)}
+                aria-current={tab === tb.id ? "page" : undefined}
                 className={`inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 font-mono text-xs transition-colors ${
-                  tab === t.id
+                  tab === tb.id
                     ? "border-primary text-foreground"
                     : "border-transparent text-muted-foreground hover:text-foreground"
                 }`}
               >
-                <t.icon className="h-3.5 w-3.5" />
-                {t.label}
+                <tb.icon className="h-3.5 w-3.5" />
+                {t(`tab.${tb.id}`)}
               </button>
             ))}
           </nav>
@@ -208,11 +210,11 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
           <div className="di-fade-up space-y-4">
             {/* stat cards */}
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-              <StatCard icon={<Clock className="h-4 w-4 text-primary" />} label="uptime" value={uptime} sub={activatedAt ? `since ${new Date(activatedAt).toLocaleString()}` : undefined} />
-              <StatCard icon={<MessageCircle className="h-4 w-4 text-primary" />} label="channels" value={`${connected.length}/1`} sub={connected.length ? connected.map((c) => c.handle || c.type).join(" · ") : "telegram not paired"} />
-              <StatCard icon={<Cable className="h-4 w-4 text-primary" />} label="fallback chain" value={`${enabledProviders.length} brain${enabledProviders.length === 1 ? "" : "s"}`} sub={enabledProviders.length ? `primary: ${enabledProviders[0].label}` : "demo brain"} />
-              <StatCard icon={<Wrench className="h-4 w-4 text-primary" />} label="tools armed" value={`${enabledTools.length}/${tools.length}`} sub={`${cycles} loop cycles`} />
-              <StatCard icon={<MonitorSmartphone className="h-4 w-4 text-primary" />} label="machines linked" value={`${machinesLinked}`} sub={machinesLinked ? "ssh + tunnel" : "pair from instances tab"} />
+              <StatCard icon={<Clock className="h-4 w-4 text-primary" />} label={t("stat.uptime")} value={uptime} sub={activatedAt ? `since ${new Date(activatedAt).toLocaleString()}` : undefined} />
+              <StatCard icon={<MessageCircle className="h-4 w-4 text-primary" />} label={t("stat.channels")} value={`${connected.length}/1`} sub={connected.length ? connected.map((c) => c.handle || c.type).join(" · ") : t("stat.notPaired")} />
+              <StatCard icon={<Cable className="h-4 w-4 text-primary" />} label={t("stat.chain")} value={t("stat.brains", { n: enabledProviders.length, s: enabledProviders.length === 1 ? "" : "s" })} sub={enabledProviders.length ? t("stat.primary", { name: enabledProviders[0].label }) : t("stat.demoBrain")} />
+              <StatCard icon={<Wrench className="h-4 w-4 text-primary" />} label={t("stat.tools")} value={`${enabledTools.length}/${tools.length}`} sub={t("stat.cycles", { n: cycles })} />
+              <StatCard icon={<MonitorSmartphone className="h-4 w-4 text-primary" />} label={t("stat.machines")} value={`${machinesLinked}`} sub={machinesLinked ? t("stat.sshTunnel") : t("stat.pairInstances")} />
             </div>
 
             {/* loop + quick actions */}
@@ -221,13 +223,13 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
                 <div className="flex items-center justify-between border-b border-border/70 pb-3">
                   <div className="flex items-center gap-2">
                     <HeartPulse className="h-4 w-4 text-primary" />
-                    <MonoLabel>live loop — {profile.agentName} working 24/7</MonoLabel>
+                    <MonoLabel>{t("loop.title", { agent: profile.agentName })}</MonoLabel>
                   </div>
                   <StatusDot ok />
                 </div>
                 <div className="di-scroll mt-3 max-h-72 space-y-2 overflow-y-auto font-mono text-xs">
                   {loopFeed.length === 0 && (
-                    <p className="text-muted-foreground">loop warming up — first tick lands in a few seconds…</p>
+                    <p className="text-muted-foreground">{t("loop.warming")}</p>
                   )}
                   {loopFeed.map((e) => (
                     <div key={e.id} className="di-fade-up flex items-start gap-2">
@@ -243,9 +245,9 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
 
               <div className="space-y-4">
                 <Panel className="p-5">
-                  <MonoLabel>missions</MonoLabel>
+                  <MonoLabel>{t("missions.title")}</MonoLabel>
                   <p className="mt-2 text-sm text-muted-foreground">
-                    Standing orders from the wizard. {profile.agentName} optimizes its loop around these:
+                    {t("missions.body", { agent: profile.agentName })}
                   </p>
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {questionnaire.goals.map((g) => (
@@ -259,20 +261,20 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
                 <Panel className="p-5">
                   <div className="flex items-center gap-2">
                     <KeyRound className="h-4 w-4 text-primary" />
-                    <MonoLabel>portal access</MonoLabel>
+                    <MonoLabel>{t("portal.title")}</MonoLabel>
                   </div>
                   <div className="mt-3 space-y-2">
-                    <CopyField label="portal username" value={profile.portalUser || "—"} />
-                    <CopyField label="portal token" value={profile.portalToken || "—"} />
+                    <CopyField label={t("pl.fUser")} value={profile.portalUser || "—"} />
+                    <CopyField label={t("pl.fToken")} value={profile.portalToken || "—"} />
                     <CopyField label="channel pairing token" value={profile.pairingToken || "—"} />
                   </div>
                   <p className="mt-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                    username + token unlock this console on any device · the pairing token goes to the telegram bot
+                    {t("portal.hint")}
                   </p>
                 </Panel>
 
                 <Panel className="p-5">
-                <MonoLabel>skill registry</MonoLabel>
+                <MonoLabel>{t("skills.title")}</MonoLabel>
                 <div className="di-scroll mt-2 max-h-44 space-y-2 overflow-y-auto">
                   {skills.map((sk) => (
                     <div key={sk.id} className="rounded-lg border border-border/70 bg-background/40 px-3 py-2">
@@ -290,7 +292,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
                   ))}
                 </div>
                 <p className="mt-3 text-[11px] text-muted-foreground">
-                  The agent builds with zcode-smart-skill v2 (GVS5H) and writes its own new skills whenever a task needs one.
+                  {t("skills.body")}
                 </p>
               </Panel>
               </div>
@@ -314,13 +316,13 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               <div className="flex items-center justify-between border-b border-border/70 pb-3">
                 <div className="flex items-center gap-2">
                   <Activity className="h-4 w-4 text-primary" />
-                  <MonoLabel>full activity log</MonoLabel>
+                  <MonoLabel>{t("actlog.title")}</MonoLabel>
                 </div>
-                <span className="font-mono text-[11px] text-muted-foreground">{activity.length} events</span>
+                <span className="font-mono text-[11px] text-muted-foreground">{t("actlog.events", { n: activity.length })}</span>
               </div>
               <div className="di-scroll mt-3 max-h-[62vh] space-y-1 overflow-y-auto">
                 {activity.length === 0 && (
-                  <p className="py-8 text-center text-sm text-muted-foreground">No events yet.</p>
+                  <p className="py-8 text-center text-sm text-muted-foreground">{t("actlog.empty")}</p>
                 )}
                 {activity.map((e) => (
                   <ActivityRow key={e.id} e={e} />
@@ -335,7 +337,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-4 font-mono text-[11px] text-muted-foreground sm:flex-row sm:px-6">
           <span className="inline-flex items-center gap-1.5">
             <MessagesSquare className="h-3.5 w-3.5 text-primary" />
-            {tasksHandled} task{tasksHandled === 1 ? "" : "s"} handled this session
+            {t("foot.tasks", { n: tasksHandled, s: tasksHandled === 1 ? "" : "s" })}
           </span>
           <button onClick={() => setView("landing")} className="hover:text-foreground">
             deep-init v1.0.0 · agent kernel

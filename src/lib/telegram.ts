@@ -11,8 +11,14 @@ import {
   type RegisteredAgent,
   type TokenMatch,
 } from "./agent-registry";
-import { runAgentChain } from "./brain";
+import { runAgentChainStreaming } from "./brain";
 import type { GatewayChat } from "./types";
+import {
+  htmlToPlain,
+  markdownToTelegramHTML,
+  plainPreview,
+  splitTelegramHtml,
+} from "./telegram-format";
 
 /* ============================================================
  * Telegram gateway — real message handling for paired bots
@@ -101,6 +107,131 @@ export async function tgSendMessage(token: string, chatId: number, text: string)
       disable_web_page_preview: true,
     });
   }
+}
+
+const EDIT_MIN_INTERVAL_MS = 1_600; // Telegram rate-friendliness
+const EDIT_MIN_NEW_CHARS = 48;
+
+/**
+ * Send (or edit-in-place) a markdown-ish reply as Telegram HTML with
+ * code-block rendering, fence-aware chunking and a plain-text fallback
+ * when Telegram rejects the entities — formatting is never silently lost.
+ */
+export async function sendFormatted(
+  token: string,
+  chatId: number,
+  md: string,
+  editMessageId?: number
+) {
+  const html = markdownToTelegramHTML(md);
+  const chunks = splitTelegramHtml(html);
+  for (let i = 0; i < chunks.length; i++) {
+    const useEdit = Boolean(editMessageId) && i === 0;
+    const method = useEdit ? "editMessageText" : "sendMessage";
+    const base = useEdit
+      ? { chat_id: chatId, message_id: editMessageId }
+      : { chat_id: chatId };
+    const r = await tgCall(token, method, {
+      ...base,
+      text: chunks[i],
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    });
+    if (!r.ok) {
+      const plain = htmlToPlain(chunks[i]).slice(0, 3900);
+      await tgCall(token, method, { ...base, text: plain, disable_web_page_preview: true });
+    }
+  }
+}
+
+interface StreamReplyResult {
+  text: string;
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * OpenClaw-style "preview streaming": a placeholder message is sent as soon
+ * as the first tokens arrive, then editMessageText appends while the model
+ * writes; the final edit swaps in fully formatted HTML (code blocks etc.).
+ * A typing action is renewed every ~4s until the stream starts.
+ */
+async function streamReplyToChat(
+  agent: RegisteredAgent,
+  chatId: number,
+  messages: { role: "system" | "user" | "assistant"; content: string }[]
+): Promise<StreamReplyResult> {
+  const token = agent.botToken;
+
+  const typing: ReturnType<typeof setInterval> | null = setInterval(() => {
+    void tgSendChatAction(token, chatId);
+  }, 4_200);
+  const stopTyping = () => {
+    if (typing) clearInterval(typing);
+  };
+
+  const st = { previewSent: false, messageId: 0, lastEditAt: 0, lastLen: 0 };
+
+  const result = await runAgentChainStreaming({
+    providers: agent.providers,
+    messages,
+    allowDemoBrain: agent.allowDemoBrain,
+    onEvent: (ev) => {
+      if (ev.type !== "delta") return;
+      const full = ev.text;
+      if (!st.previewSent) {
+        // wait for a meaningful first fragment, then claim the message slot
+        if (full.trim().length < 30) return;
+        st.previewSent = true;
+        stopTyping();
+        void tgCall(token, "sendMessage", {
+          chat_id: chatId,
+          text: plainPreview(full, 1200),
+          disable_web_page_preview: true,
+        })
+          .then((r) => {
+            const id = (r.result as { message_id?: number } | undefined)?.message_id;
+            if (r.ok && typeof id === "number") st.messageId = id;
+          })
+          .catch(() => {});
+        return;
+      }
+      const now = Date.now();
+      if (
+        st.messageId &&
+        now - st.lastEditAt >= EDIT_MIN_INTERVAL_MS &&
+        full.length - st.lastLen >= EDIT_MIN_NEW_CHARS
+      ) {
+        st.lastEditAt = now;
+        st.lastLen = full.length;
+        void tgCall(token, "editMessageText", {
+          chat_id: chatId,
+          message_id: st.messageId,
+          text: plainPreview(full) + " ▌",
+          disable_web_page_preview: true,
+        }).catch(() => {});
+      }
+    },
+  });
+  stopTyping();
+
+  if (!result.ok || !result.content) {
+    const errText = `⚠ All brains failed to answer just now. Last error: ${
+      result.fallbackChain.at(-1)?.error || result.error || "unknown"
+    }`;
+    return { text: errText, ok: false, error: result.error };
+  }
+
+  const reply = result.content;
+
+  if (st.previewSent && st.messageId) {
+    // finalize: swap the preview for the fully formatted version (chunk-aware)
+    await sendFormatted(token, chatId, reply, st.messageId);
+  } else {
+    // stream never produced a preview (fast response) — send formatted now
+    await sendFormatted(token, chatId, reply);
+  }
+  return { text: reply, ok: true };
 }
 
 /* ---------------- update handling ---------------- */
@@ -232,7 +363,7 @@ export async function handleTelegramUpdate(
     return { handled: "hint", replyPreview: "needs pairing token" };
   }
 
-  /* 4) chat message */
+  /* 4) chat message — streamed live to the chat (preview streaming) */
   if (boundAgent && boundChat) {
     const agent = boundAgent;
     agent.lastSeen = Date.now();
@@ -240,8 +371,6 @@ export async function handleTelegramUpdate(
     const thread: ChatMsg[] =
       boundChat.mode === "isolated" ? boundChat.thread : agent.sharedThread;
     pushThread(thread, { role: "user", content: text });
-
-    await tgSendChatAction(agent.botToken, chatId);
 
     const messages = [
       {
@@ -251,25 +380,15 @@ export async function handleTelegramUpdate(
       ...thread,
     ];
 
-    const result = await runAgentChain({
-      providers: agent.providers,
-      messages,
-      allowDemoBrain: agent.allowDemoBrain,
-    });
+    const out = await streamReplyToChat(agent, chatId, messages);
 
-    const reply =
-      result.content ||
-      `⚠ All brains failed to answer just now. Last error: ${
-        result.fallbackChain.at(-1)?.error || result.error || "unknown"
-      }`;
-
-    pushThread(thread, { role: "assistant", content: reply });
-    await replyAndRecord(agent, chatId, reply);
+    pushThread(thread, { role: "assistant", content: out.text });
+    recordReply(agent, chatId, out.text);
     touchAgent(agent);
     return {
       handled: "chat",
-      replyPreview: reply.slice(0, 120),
-      error: result.ok ? undefined : result.error,
+      replyPreview: out.text.slice(0, 120),
+      error: out.ok ? undefined : out.error,
     };
   }
 

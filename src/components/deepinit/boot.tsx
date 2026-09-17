@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { useDeepInit } from "@/lib/store";
+import { useT } from "@/lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import { Logo, MonoLabel, Panel } from "./ui-bits";
 
@@ -13,6 +14,7 @@ export function BootSequence({ onDone }: { onDone: () => void }) {
   const tools = useDeepInit((s) => s.tools);
   const activate = useDeepInit((s) => s.activate);
   const logActivity = useDeepInit((s) => s.logActivity);
+  const t = useT();
 
   const [lineCount, setLineCount] = useState(0);
   const firedRef = useRef(false);
@@ -75,7 +77,7 @@ export function BootSequence({ onDone }: { onDone: () => void }) {
         <div className="mb-5 flex items-center justify-between border-b border-border/70 pb-4">
           <div className="flex items-center gap-3">
             <Logo className="text-lg" />
-            <MonoLabel>agent boot</MonoLabel>
+            <MonoLabel>{t("boot.label")}</MonoLabel>
           </div>
           <div className="flex gap-1.5">
             <span className={`h-2.5 w-2.5 rounded-full ${done ? "bg-primary" : "bg-amber-400"}`} />
@@ -94,7 +96,7 @@ export function BootSequence({ onDone }: { onDone: () => void }) {
           {done && (
             <div className="di-fade-up mt-6">
               <Button onClick={onDone} size="lg" className="di-glow w-full font-mono">
-                ENTER AGENT CONSOLE
+                {t("boot.enter")}
               </Button>
             </div>
           )}

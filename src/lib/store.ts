@@ -17,6 +17,7 @@ import type {
   View,
   WhitelistUser,
 } from "./types";
+import type { Lang } from "./i18n";
 import { genPairingToken, genPortalToken, slugifyUser } from "./tokens";
 
 export const BUILTIN_TOOLS: AgentTool[] = [
@@ -88,6 +89,8 @@ interface DeepInitState {
   voice: VoiceSettings;
   skills: AgentSkill[];
   whitelist: WhitelistUser[];
+  /** UI language: en / ru / he (he flips the app to RTL) */
+  uiLang: Lang;
 
   setView: (v: View) => void;
   setWizardStep: (s: number) => void;
@@ -121,6 +124,7 @@ interface DeepInitState {
   addWhitelistUser: (w: WhitelistUser) => void;
   removeWhitelistUser: (id: string) => void;
   updateWhitelistUser: (id: string, patch: Partial<WhitelistUser>) => void;
+  setUiLang: (l: Lang) => void;
   /** generates portal credentials + owner pairing token (wizard step 1) */
   ensureCredentials: () => void;
   resetAll: () => void;
@@ -169,6 +173,7 @@ export const useDeepInit = create<DeepInitState>()(
       voice: defaultVoice,
       skills: BUILTIN_SKILLS,
       whitelist: [],
+      uiLang: "en",
 
       setHydrated: () => set({ hydrated: true }),
       setView: (view) => set({ view }),
@@ -246,6 +251,8 @@ export const useDeepInit = create<DeepInitState>()(
       updateWhitelistUser: (id, patch) =>
         set((s) => ({ whitelist: s.whitelist.map((w) => (w.id === id ? { ...w, ...patch } : w)) })),
 
+      setUiLang: (l) => set({ uiLang: l }),
+
       ensureCredentials: () =>
         set((s) => {
           const patch: Partial<UserProfile> = {};
@@ -273,6 +280,8 @@ export const useDeepInit = create<DeepInitState>()(
           voice: defaultVoice,
           skills: BUILTIN_SKILLS,
           whitelist: [],
+          // language preference survives a factory reset
+          uiLang: get().uiLang,
         }),
     }),
     {
@@ -295,6 +304,7 @@ export const useDeepInit = create<DeepInitState>()(
         voice: s.voice,
         skills: s.skills,
         whitelist: s.whitelist,
+        uiLang: s.uiLang,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();

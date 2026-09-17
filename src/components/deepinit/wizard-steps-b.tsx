@@ -8,6 +8,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useDeepInit } from "@/lib/store";
+import { useT } from "@/lib/i18n";
 import type { AIProvider, MessagingChannel, Questionnaire } from "@/lib/types";
 import { Check, Clock, Cpu, KeyRound, Sparkles, User } from "lucide-react";
 import { useState } from "react";
@@ -29,6 +30,7 @@ export const GOALS = [
 export const LANGUAGES = ["English", "中文", "Español", "Français", "Deutsch", "العربية", "Português", "Русский", "日本語"];
 
 export function StepQuestionnaire({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+  const t = useT();
   const q = useDeepInit((s) => s.questionnaire);
   const setQ = useDeepInit((s) => s.setQuestionnaire);
 
@@ -185,13 +187,13 @@ export function StepQuestionnaire({ onNext, onBack }: { onNext: () => void; onBa
       </div>
 
       <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack} className="font-mono">← Back</Button>
+        <Button variant="outline" onClick={onBack} className="font-mono">{t("wz.back")}</Button>
         <Button
           onClick={onNext}
           className="font-mono"
           disabled={q.goals.length === 0}
         >
-          {q.goals.length === 0 ? "Pick at least one focus" : "Review & initialize →"}
+          {q.goals.length === 0 ? t("wz.pickFocus") : t("wz.reviewNext")}
         </Button>
       </div>
     </div>
@@ -204,6 +206,7 @@ export function StepReview({ onBack, onInitialize }: { onBack: () => void; onIni
   const providers = useDeepInit((s) => s.providers);
   const q = useDeepInit((s) => s.questionnaire);
   const tools = useDeepInit((s) => s.tools);
+  const t = useT();
 
   const sorted = [...providers].sort((a, b) => a.priority - b.priority);
   const connected = channels.filter((c) => c.status === "connected");
@@ -213,7 +216,7 @@ export function StepReview({ onBack, onInitialize }: { onBack: () => void; onIni
     <div className="space-y-6">
       <div>
         <MonoLabel className="mb-2">{`/// step 5 of 5 — final check`}</MonoLabel>
-        <h2 className="text-2xl font-bold tracking-tight">Everything is set. Initialize?</h2>
+        <h2 className="text-2xl font-bold tracking-tight">{t("wz.reviewTitle")}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Hit the switch and the agent boots into its 24/7 loop. Everything below stays editable later.
         </p>
@@ -297,7 +300,7 @@ export function StepReview({ onBack, onInitialize }: { onBack: () => void; onIni
       </div>
 
       <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack} className="font-mono">← Back</Button>
+        <Button variant="outline" onClick={onBack} className="font-mono">{t("wz.back")}</Button>
         <Button onClick={onInitialize} size="lg" className="di-glow font-mono">
           <Sparkles className="mr-2 h-4 w-4" /> sudo init --agent
         </Button>

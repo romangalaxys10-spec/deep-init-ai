@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { buildSystemPrompt, uid, useDeepInit } from "@/lib/store";
+import { useT } from "@/lib/i18n";
 import type { AIProvider, ProviderCompat } from "@/lib/types";
 import {
   ArrowDown,
@@ -24,6 +25,7 @@ import {
 import { useMemo, useState } from "react";
 import { CopyField, MonoLabel, Panel, StatusDot } from "./ui-bits";
 import { ChannelLine, ProviderLine, StepQuestionnaire, StepReview } from "./wizard-steps-b";
+import { LangSwitch } from "./lang-switch";
 
 const WIZARD_STEPS = ["Operator", "Telegram", "AI brains", "Directives", "Initialize"] as const;
 
@@ -58,6 +60,7 @@ const COMMON_TZ = [
 export function Wizard({ onInitialize }: { onInitialize: () => void }) {
   const step = useDeepInit((s) => s.wizardStep);
   const setStep = useDeepInit((s) => s.setWizardStep);
+  const t = useT();
 
   return (
     <div className="di-grid-bg min-h-screen">
@@ -66,7 +69,7 @@ export function Wizard({ onInitialize }: { onInitialize: () => void }) {
         <div className="mb-8 flex flex-wrap items-center gap-2">
           {WIZARD_STEPS.map((s, i) => (
             <button
-              key={s}
+              key={i}
               onClick={() => i < step && setStep(i)}
               className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-[11px] transition-colors ${
                 i === step
@@ -77,9 +80,12 @@ export function Wizard({ onInitialize }: { onInitialize: () => void }) {
               }`}
             >
               <span className={i <= step ? "text-primary" : ""}>{String(i + 1).padStart(2, "0")}</span>
-              <span className="hidden sm:inline">{s}</span>
+              <span className="hidden sm:inline">{t(`wz.step${i + 1}`)}</span>
             </button>
           ))}
+          <div className="ms-auto">
+            <LangSwitch />
+          </div>
         </div>
 
         {step === 0 && <StepIdentity onNext={() => setStep(1)} />}
@@ -98,6 +104,7 @@ function StepIdentity({ onNext }: { onNext: () => void }) {
   const profile = useDeepInit((s) => s.profile);
   const setProfile = useDeepInit((s) => s.setProfile);
   const ensureCredentials = useDeepInit((s) => s.ensureCredentials);
+  const t = useT();
 
   const tzOptions = useMemo(() => {
     let list: string[] = COMMON_TZ;
@@ -176,7 +183,7 @@ function StepIdentity({ onNext }: { onNext: () => void }) {
           disabled={!valid}
           className="font-mono"
         >
-          Next: connect telegram →
+          {t("wz.nextTelegram")}
         </Button>
       </div>
     </div>
@@ -190,6 +197,7 @@ function StepChannels({ onNext, onBack }: { onNext: () => void; onBack: () => vo
   const profile = useDeepInit((s) => s.profile);
   const addChannel = useDeepInit((s) => s.addChannel);
   const { toast } = useToast();
+  const t = useT();
 
   const channel = channels.find((c) => c.type === "telegram");
 
@@ -233,8 +241,8 @@ function StepChannels({ onNext, onBack }: { onNext: () => void; onBack: () => vo
       </Panel>
 
       <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack} className="font-mono">← Back</Button>
-        <Button onClick={onNext} className="font-mono">Next: connect AI brains →</Button>
+        <Button variant="outline" onClick={onBack} className="font-mono">{t("wz.back")}</Button>
+        <Button onClick={onNext} className="font-mono">{t("wz.nextBrains")}</Button>
       </div>
     </div>
   );
@@ -458,6 +466,7 @@ function StepProviders({ onNext, onBack }: { onNext: () => void; onBack: () => v
   const addProvider = useDeepInit((s) => s.addProvider);
   const updateProvider = useDeepInit((s) => s.updateProvider);
   const removeProvider = useDeepInit((s) => s.removeProvider);
+  const t = useT();
   const moveProvider = useDeepInit((s) => s.moveProvider);
   const logActivity = useDeepInit((s) => s.logActivity);
   const { toast } = useToast();
@@ -651,9 +660,9 @@ function StepProviders({ onNext, onBack }: { onNext: () => void; onBack: () => v
       </Panel>
 
       <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack} className="font-mono">← Back</Button>
+        <Button variant="outline" onClick={onBack} className="font-mono">{t("wz.back")}</Button>
         <Button onClick={onNext} className="font-mono">
-          {sorted.length ? "Next: shape its behavior →" : "Skip — use demo brain →"}
+          {sorted.length ? t("wz.nextShape") : t("wz.skipDemo")}
         </Button>
       </div>
     </div>

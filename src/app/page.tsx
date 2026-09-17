@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useDeepInit } from "@/lib/store";
+import { dirOf } from "@/lib/i18n";
 import { Landing } from "@/components/deepinit/landing";
 import { Wizard } from "@/components/deepinit/wizard";
 import { BootSequence } from "@/components/deepinit/boot";
@@ -27,6 +28,13 @@ export default function Home() {
   const [authed, setAuthed] = useState(() =>
     typeof window === "undefined" ? false : sessionStorage.getItem(AUTH_SESSION_KEY) === "1"
   );
+
+  // UI language → document direction (Hebrew = RTL) + lang attribute
+  const uiLang = useDeepInit((s) => s.uiLang);
+  useEffect(() => {
+    document.documentElement.dir = dirOf(uiLang);
+    document.documentElement.lang = uiLang;
+  }, [uiLang]);
 
   // Prevent rendering persisted state before hydration to avoid mismatches.
   if (!mounted || !hydrated) {

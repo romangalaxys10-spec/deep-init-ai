@@ -1,0 +1,502 @@
+import { useDeepInit } from "./store";
+
+/* ============================================================
+ * i18n — English / Русский / עברית
+ * Flat dot-keys, {var} interpolation, English fallback.
+ * Hebrew flips the document to RTL (dirOf).
+ * ============================================================ */
+
+export type Lang = "en" | "ru" | "he";
+
+export const LANGS: { id: Lang; label: string; short: string }[] = [
+  { id: "en", label: "English", short: "EN" },
+  { id: "ru", label: "Русский", short: "RU" },
+  { id: "he", label: "עברית", short: "HE" },
+];
+
+export function dirOf(lang: Lang): "ltr" | "rtl" {
+  return lang === "he" ? "rtl" : "ltr";
+}
+
+const en: Record<string, string> = {
+  /* nav / hero */
+  "nav.cta": "Initialize agent",
+  "hero.kicker": "/// autonomous personal agent",
+  "hero.titleA": "Your computer just hired a",
+  "hero.titleB": "full-time agent",
+  "hero.sub":
+    "Deep-init AI is a 24/7 personal assistant that can do anything a human can do on a computer — find, create, fetch, wire up any MCP / API / endpoint / plugin, learn new skills and even create its own. You talk to it on Telegram.",
+  "hero.cta1": "Initialize your agent",
+  "hero.cta2": "How it works",
+  "hero.f1": "your keys stay with you",
+  "hero.f2": "BYO providers & MCP",
+  "hero.f3": "uptime loop 24/7",
+  "panel.boot": "boot sequence",
+  "panel.kernel": "kernel",
+  "panel.active": "active",
+  "panel.fallback": "fallback",
+  "panel.armed": "armed",
+  "panel.memory": "memory",
+  "panel.persistent": "persistent",
+  /* capabilities */
+  "cap.kicker": "/// capability matrix",
+  "cap.title": "Not a chatbot. A full-time operator.",
+  "cap1.title": "Runs 24/7, never sleeps",
+  "cap1.body":
+    "A persistent loop on your machine with heartbeats, schedules and self-wakeups. It works while you don't.",
+  "cap2.title": "Anything a human can do on a computer",
+  "cap2.body":
+    "Browses, clicks, types, reads and writes files, runs code, fills forms — full computer-use across apps and OS.",
+  "cap3.title": "Any MCP / API / plugin — self-wired",
+  "cap3.body":
+    "Point it at any MCP server, REST endpoint or plugin. If a tool doesn't exist, it builds one and registers it.",
+  "cap4.title": "Self-learning, self-creating",
+  "cap4.body":
+    "Every task feeds long-term memory. It writes its own skills, prompts and automations and reuses them forever.",
+  "cap5.title": "Multi-provider fallback",
+  "cap5.body":
+    "Connect OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Ollama — anything. If one fails, the next brain takes over mid-task.",
+  "cap6.title": "Lives in your Telegram",
+  "cap6.body":
+    "Pair the built-in bot or your own and command your agent from anywhere. It reports back proactively, day and night.",
+  /* how it works */
+  "how.kicker": "/// init sequence",
+  "how.title": "From zero to autonomous in four steps.",
+  "how.s1.title": "Pair your Telegram",
+  "how.s1.body":
+    "Your own @BotFather bot or our built-in @init_smart_bot — send a pairing token and you're live.",
+  "how.s2.title": "Connect your AI providers",
+  "how.s2.body":
+    "Add any OpenAI-compatible or Anthropic endpoint with key + model. Order them into a fallback chain.",
+  "how.s3.title": "Answer a friendly wizard",
+  "how.s3.body":
+    "Six quick questions shape your agent's goals, personality, autonomy and active hours.",
+  "how.s4.title": "Initialize. It takes over.",
+  "how.s4.body":
+    "The agent boots, mounts your tools and starts its 24/7 loop. Watch everything live in the console.",
+  "how.cta": "Start the wizard",
+  "footer.tag": "runs on your machine · your keys · your data",
+  /* portal login */
+  "pl.kicker": "portal access",
+  "pl.locked": "{agent} · locked",
+  "pl.title": "Welcome back — sign in to the console",
+  "pl.sub": "Use the username + access token generated during the initial wizard.",
+  "pl.user": "Username",
+  "pl.token": "Access token",
+  "pl.submit": "Unlock console",
+  "pl.checking": "checking...",
+  "pl.errorBoth": "Both the username and the token are required and must match.",
+  "pl.errorNo":
+    "No match. Use the username + access token generated during the wizard (check the wizard's final screen or your password manager).",
+  "pl.mintTitle": "new credentials generated — save them now",
+  "pl.mintBody":
+    "This browser had an agent without portal credentials, so a fresh set was minted. Use them below — and store them somewhere safe.",
+  "pl.fUser": "portal username",
+  "pl.fToken": "portal token",
+  "pl.hint":
+    "credentials live in this browser's local storage — check the wizard's final \u201caccess credentials\u201d screen if you saved them elsewhere.",
+  "pl.lost": "lost access on this device?",
+  "pl.reset": "factory reset",
+  "pl.resetConfirm": "Factory reset this browser's agent data and start a fresh wizard?",
+  "pl.toastTitle": "Access granted",
+  "pl.toastBody": "Welcome back, {name}.",
+  /* boot */
+  "boot.label": "agent boot",
+  "boot.enter": "ENTER AGENT CONSOLE",
+  /* dashboard chrome */
+  "tab.overview": "overview",
+  "tab.console": "console",
+  "tab.channels": "channels",
+  "tab.brains": "brains",
+  "tab.tools": "tools · mcp",
+  "tab.instances": "instances",
+  "tab.activity": "activity",
+  "act.lock": "Lock",
+  "act.reset": "Reset",
+  "dash.activeUp": "active · up {uptime}",
+  "dash.resetTitle": "Factory reset the agent?",
+  "dash.resetBody":
+    "Wipes the operator profile, channels, provider chain, tools and memory on this device. The agent will need to be initialized again.",
+  "dash.resetCancel": "Keep it running",
+  "dash.resetConfirm": "Wipe & restart",
+  "stat.uptime": "uptime",
+  "stat.channels": "channels",
+  "stat.chain": "fallback chain",
+  "stat.tools": "tools armed",
+  "stat.machines": "machines linked",
+  "stat.notPaired": "telegram not paired",
+  "stat.demoBrain": "demo brain",
+  "stat.primary": "primary: {name}",
+  "stat.brains": "{n} brain{s}",
+  "stat.cycles": "{n} loop cycles",
+  "stat.sshTunnel": "ssh + tunnel",
+  "stat.pairInstances": "pair from instances tab",
+  "loop.title": "live loop — {agent} working 24/7",
+  "loop.warming": "loop warming up — first tick lands in a few seconds…",
+  "missions.title": "missions",
+  "missions.body": "Standing orders from the wizard. {agent} optimizes its loop around these:",
+  "portal.title": "portal access",
+  "portal.hint": "username + token unlock this console on any device · the pairing token goes to the telegram bot",
+  "skills.title": "skill registry",
+  "skills.body":
+    "The agent builds with zcode-smart-skill v2 (GVS5H) and writes its own new skills whenever a task needs one.",
+  "actlog.title": "full activity log",
+  "actlog.events": "{n} events",
+  "actlog.empty": "No events yet.",
+  "foot.tasks": "{n} task{s} handled this session",
+  /* console */
+  "cs.title": "{agent} console",
+  "cs.machines": "{n} machine(s) linked",
+  "cs.noMachines": "no machines linked",
+  "cs.brainsArmed": "{n} brain{s} armed",
+  "cs.emptyTitle": "Command {agent} directly",
+  "cs.emptyBody":
+    "Tasks, research, automation, code — it answers with its own judgment and its own tools.",
+  "cs.working": "{agent} is working the fallback chain…",
+  "cs.hint": "enter to send",
+  "cs.placeholder": "Tell {agent} what to do… (Enter to send, Shift+Enter for newline)",
+  "cs.sug1": "What can you do for me?",
+  "cs.sug2": "Plan my day and brief me",
+  "cs.sug3": "Set up a cron to watch a price page",
+  "cs.sug4": "Write a script that organizes my downloads",
+  "cs.toastFailTitle": "No brain responded",
+  "cs.toastFailBody": "Check your providers or add a fallback.",
+  /* wizard chrome */
+  "wz.step1": "Operator",
+  "wz.step2": "Telegram",
+  "wz.step3": "AI brains",
+  "wz.step4": "Directives",
+  "wz.step5": "Initialize",
+  "wz.back": "← Back",
+  "wz.nextTelegram": "Next: connect telegram →",
+  "wz.nextBrains": "Next: connect AI brains →",
+  "wz.nextShape": "Next: shape its behavior →",
+  "wz.skipDemo": "Skip — use demo brain →",
+  "wz.pickFocus": "Pick at least one focus",
+  "wz.reviewNext": "Review & initialize →",
+  "wz.reviewTitle": "Everything is set. Initialize?",
+};
+
+const ru: Record<string, string> = {
+  "nav.cta": "Инициализировать агента",
+  "hero.kicker": "/// автономный личный агент",
+  "hero.titleA": "Ваш компьютер только что нанял",
+  "hero.titleB": "агента на полную ставку",
+  "hero.sub":
+    "Deep-init AI — личный ассистент 24/7, который умеет всё, что умеет человек за компьютером: искать, создавать, подключать любые MCP / API / эндпоинты / плагины, учиться новым навыкам и даже создавать свои. Общайтесь с ним в Telegram.",
+  "hero.cta1": "Инициализировать агента",
+  "hero.cta2": "Как это работает",
+  "hero.f1": "ваши ключи остаются у вас",
+  "hero.f2": "свои провайдеры и MCP",
+  "hero.f3": "цикл работы 24/7",
+  "panel.boot": "загрузка системы",
+  "panel.kernel": "ядро",
+  "panel.active": "активно",
+  "panel.fallback": "фолбэк",
+  "panel.armed": "взведён",
+  "panel.memory": "память",
+  "panel.persistent": "постоянная",
+  "cap.kicker": "/// матрица возможностей",
+  "cap.title": "Не чат-бот. Оператор на полную ставку.",
+  "cap1.title": "Работает 24/7, никогда не спит",
+  "cap1.body":
+    "Постоянный цикл на вашей машине: сердцебиение, расписания и самопробуждение. Он работает, пока вы отдыхаете.",
+  "cap2.title": "Всё, что умеет человек за компьютером",
+  "cap2.body":
+    "Сёрфит, кликает, печатает, читает и пишет файлы, запускает код, заполняет формы — полный computer-use во всех приложениях и ОС.",
+  "cap3.title": "Любой MCP / API / плагин — подключает сам",
+  "cap3.body":
+    "Направьте его к любому MCP-серверу, REST-эндпоинту или плагину. Нет инструмента — он создаст его сам и зарегистрирует.",
+  "cap4.title": "Самообучение и самосоздание",
+  "cap4.body":
+    "Каждая задача пополняет долговременную память. Он пишет свои навыки, промпты и автоматизации — и использует их вечно.",
+  "cap5.title": "Мультипровайдерный фолбэк",
+  "cap5.body":
+    "Подключите OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Ollama — что угодно. Если один мозг упал, следующая нейронка подхватывает задачу на лету.",
+  "cap6.title": "Живёт в вашем Telegram",
+  "cap6.body":
+    "Подключите встроенного бота или своего — и командуйте агентом откуда угодно. Он сам пишет вам отчёты, днём и ночью.",
+  "how.kicker": "/// последовательность инициализации",
+  "how.title": "От нуля до автономности за четыре шага.",
+  "how.s1.title": "Подключите Telegram",
+  "how.s1.body":
+    "Свой бот от @BotFather или наш встроенный @init_smart_bot — отправьте токен сопряжения, и вы на связи.",
+  "how.s2.title": "Подключите AI-провайдеры",
+  "how.s2.body":
+    "Добавьте любой эндпоинт OpenAI-совместимый или Anthropic: ключ + модель. Выстройте их в цепочку фолбэка.",
+  "how.s3.title": "Ответьте на вопросы мастера",
+  "how.s3.body":
+    "Шесть коротких вопросов определяют цели, характер, автономность и активные часы вашего агента.",
+  "how.s4.title": "Инициализация. Дальше он сам.",
+  "how.s4.body":
+    "Агент загружается, монтирует инструменты и запускает цикл 24/7. Наблюдайте за всем в консоли.",
+  "how.cta": "Запустить мастер",
+  "footer.tag": "работает на вашей машине · ваши ключи · ваши данные",
+  "pl.kicker": "доступ в портал",
+  "pl.locked": "{agent} · заблокирован",
+  "pl.title": "С возвращением — войдите в консоль",
+  "pl.sub": "Используйте имя пользователя и токен доступа, созданные мастером настройки.",
+  "pl.user": "Имя пользователя",
+  "pl.token": "Токен доступа",
+  "pl.submit": "Открыть консоль",
+  "pl.checking": "проверяем...",
+  "pl.errorBoth": "Нужны и имя пользователя, и токен — и они должны совпадать.",
+  "pl.errorNo":
+    "Не совпадает. Используйте имя + токен доступа, созданные мастером (см. финальный экран мастера или свой менеджер паролей).",
+  "pl.mintTitle": "созданы новые учётные данные — сохраните их сейчас",
+  "pl.mintBody":
+    "В этом браузере был агент без учётных данных портала, поэтому мы выпустили новый комплект. Используйте их ниже — и храните в надёжном месте.",
+  "pl.fUser": "имя портала",
+  "pl.fToken": "токен портала",
+  "pl.hint":
+    "учётные данные живут в localStorage этого браузера — если сохранили их в другом месте, см. финальный экран «учётные данные» мастера.",
+  "pl.lost": "потеряли доступ на этом устройстве?",
+  "pl.reset": "сброс к заводским",
+  "pl.resetConfirm": "Сбросить данные агента в этом браузере и запустить мастер заново?",
+  "pl.toastTitle": "Доступ разрешён",
+  "pl.toastBody": "С возвращением, {name}.",
+  "boot.label": "загрузка агента",
+  "boot.enter": "ВОЙТИ В КОНСОЛЬ АГЕНТА",
+  "tab.overview": "обзор",
+  "tab.console": "консоль",
+  "tab.channels": "каналы",
+  "tab.brains": "мозги",
+  "tab.tools": "инструменты · mcp",
+  "tab.instances": "машины",
+  "tab.activity": "активность",
+  "act.lock": "Заблокировать",
+  "act.reset": "Сброс",
+  "dash.activeUp": "активен · {uptime}",
+  "dash.resetTitle": "Сбросить агента к заводским настройкам?",
+  "dash.resetBody":
+    "Стирает профиль оператора, каналы, цепочку провайдеров, инструменты и память на этом устройстве. Агента придётся инициализировать заново.",
+  "dash.resetCancel": "Оставить работать",
+  "dash.resetConfirm": "Стереть и перезапустить",
+  "stat.uptime": "аптайм",
+  "stat.channels": "каналы",
+  "stat.chain": "цепочка фолбэка",
+  "stat.tools": "инструменты взведены",
+  "stat.machines": "машин подключено",
+  "stat.notPaired": "telegram не подключён",
+  "stat.demoBrain": "демо-мозг",
+  "stat.primary": "основной: {name}",
+  "stat.brains": "{n} мозг{ov}",
+  "stat.cycles": "циклов: {n}",
+  "stat.sshTunnel": "ssh + туннель",
+  "stat.pairInstances": "подключите во вкладке «машины»",
+  "loop.title": "живой цикл — {agent} работает 24/7",
+  "loop.warming": "цикл прогревается — первый тик через пару секунд…",
+  "missions.title": "миссии",
+  "missions.body": "Постоянные приказы из мастера. {agent} строит свой цикл вокруг них:",
+  "portal.title": "доступ в портал",
+  "portal.hint":
+    "имя + токен открывают консоль на любом устройстве · токен сопряжения отправляется боту в telegram",
+  "skills.title": "реестр навыков",
+  "skills.body":
+    "Агент строит с zcode-smart-skill v2 (GVS5H) и сам пишет новые навыки, когда задача требует.",
+  "actlog.title": "полный журнал активности",
+  "actlog.events": "событий: {n}",
+  "actlog.empty": "Событий пока нет.",
+  "foot.tasks": "задач за сессию: {n}",
+  "cs.title": "консоль {agent}",
+  "cs.machines": "машин подключено: {n}",
+  "cs.noMachines": "машины не подключены",
+  "cs.brainsArmed": "мозгов взведено: {n}",
+  "cs.emptyTitle": "Командуйте {agent} напрямую",
+  "cs.emptyBody":
+    "Задачи, исследования, автоматизация, код — отвечает своим суждением и своими инструментами.",
+  "cs.working": "{agent} работает по цепочке фолбэка…",
+  "cs.hint": "enter — отправить",
+  "cs.placeholder": "Скажите {agent}, что делать… (Enter — отправить, Shift+Enter — новая строка)",
+  "cs.sug1": "Что ты умеешь?",
+  "cs.sug2": "Спланируй мой день и дай брифинг",
+  "cs.sug3": "Настрой cron для слежения за ценой",
+  "cs.sug4": "Напиши скрипт, который разберёт мои загрузки",
+  "cs.toastFailTitle": "Ни один мозг не ответил",
+  "cs.toastFailBody": "Проверьте провайдеров или добавьте фолбэк.",
+  "wz.step1": "Оператор",
+  "wz.step2": "Telegram",
+  "wz.step3": "AI-мозги",
+  "wz.step4": "Директивы",
+  "wz.step5": "Инициализация",
+  "wz.back": "← Назад",
+  "wz.nextTelegram": "Далее: подключить Telegram →",
+  "wz.nextBrains": "Далее: подключить AI-мозги →",
+  "wz.nextShape": "Далее: настроить поведение →",
+  "wz.skipDemo": "Пропустить — демо-мозг →",
+  "wz.pickFocus": "Выберите хотя бы один фокус",
+  "wz.reviewNext": "Обзор и инициализация →",
+  "wz.reviewTitle": "Всё готово. Инициализировать?",
+};
+
+const he: Record<string, string> = {
+  "nav.cta": "אתחול הסוכן",
+  "hero.kicker": "/// סוכן אישי אוטונומי",
+  "hero.titleA": "המחשב שלכם העסיק",
+  "hero.titleB": "סוכן במשרה מלאה",
+  "hero.sub":
+    "Deep-init AI הוא עוזר אישי 24/7 שיכול לעשות כל מה שאדם עושה מול מחשב — למצוא, ליצור, לחבר כל MCP / API / נקודת קצה / תוסף, ללמוד כישורים חדשים ואפילו ליצור כאלה משלו. מדברים איתו בטלגרם.",
+  "hero.cta1": "אתחול הסוכן שלכם",
+  "hero.cta2": "איך זה עובד",
+  "hero.f1": "המפתחות שלכם נשארים אצלכם",
+  "hero.f2": "ספקים ו-MCP משלכם",
+  "hero.f3": "לופ פעיל 24/7",
+  "panel.boot": "רצף אתחול",
+  "panel.kernel": "קרנל",
+  "panel.active": "פעיל",
+  "panel.fallback": "גיבוי",
+  "panel.armed": "דרוך",
+  "panel.memory": "זיכרון",
+  "panel.persistent": "מתמשך",
+  "cap.kicker": "/// מטריצת יכולות",
+  "cap.title": "לא צ'אט-בוט. מפעיל במשרה מלאה.",
+  "cap1.title": "עובד 24/7, לעולם לא ישן",
+  "cap1.body":
+    "לופ מתמשך על המחשב שלכם עם דופק, לוחות זמנים והתעוררות עצמית. הוא עובד כשאתם לא.",
+  "cap2.title": "כל מה שאדם יכול לעשות מול מחשב",
+  "cap2.body":
+    "גולש, לוחץ, מקליד, קורא וכותב קבצים, מריץ קוד, ממלא טפסים — computer-use מלא בכל האפליקציות ומערכות ההפעלה.",
+  "cap3.title": "כל MCP / API / תוסף — מחבר בעצמו",
+  "cap3.body":
+    "הפנו אותו לכל שרת MCP, נקודת קצה או תוסף. אין כלי כזה? הוא יבנה אותו וירשום אותו בעצמו.",
+  "cap4.title": "לומד ויוצר את עצמו",
+  "cap4.body":
+    "כל משימה מזינה זיכרון ארוך-טווח. הוא כותב כישורים, פרומפטים ואוטומציות משלו ומשתמש בהם לנצח.",
+  "cap5.title": "גיבוי מרובה ספקים",
+  "cap5.body":
+    "חברו OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Ollama — כל אחד. אם מוח אחד נופל, המוח הבא ממשיך את המשימה באמצע.",
+  "cap6.title": "גר בטלגרם שלכם",
+  "cap6.body":
+    "חברו את הבוט המובנה או בוט משלכם ושלטו בסוכן מכל מקום. הוא מדווח ביוזמתו, יום ולילה.",
+  "how.kicker": "/// רצף האתחול",
+  "how.title": "מאפס לאוטונומיה בארבעה צעדים.",
+  "how.s1.title": "חברו את הטלגרם",
+  "how.s1.body":
+    "בוט משלכם מ-@BotFather או הבוט המובנה @init_smart_bot — שלחו טוקן צימוד ואתם בעניינים.",
+  "how.s2.title": "חברו את ספקי ה-AI",
+  "how.s2.body":
+    "הוסיפו כל נקודת קצה תואמת OpenAI או Anthropic עם מפתח + מודל. סדרו אותם בשרשרת גיבוי.",
+  "how.s3.title": "ענו על אשף ידידותי",
+  "how.s3.body":
+    "שש שאלות קצרות מעצבות את המטרות, האישיות, האוטונומיה ושעות הפעילות של הסוכן.",
+  "how.s4.title": "אתחול. מכאן זה עליו.",
+  "how.s4.body":
+    "הסוכן עולה, מצמיד את הכלים ומתחיל לופ 24/7. צפו בהכול חי בקונסולה.",
+  "how.cta": "התחילו את האשף",
+  "footer.tag": "רץ על המחשב שלכם · המפתחות שלכם · הנתונים שלכם",
+  "pl.kicker": "גישה לפורטל",
+  "pl.locked": "{agent} · נעול",
+  "pl.title": "ברוכים השבים — התחברו לקונסולה",
+  "pl.sub": "השתמשו בשם המשתמש + טוקן הגישה שנוצרו באשף ההתקנה.",
+  "pl.user": "שם משתמש",
+  "pl.token": "טוקן גישה",
+  "pl.submit": "פתיחת הקונסולה",
+  "pl.checking": "בודק...",
+  "pl.errorBoth": "נדרשים גם שם המשתמש וגם הטוקן — והם חייבים להתאים.",
+  "pl.errorNo":
+    "אין התאמה. השתמשו בשם + טוקן הגישה שנוצרו באשף (מסך הסיום של האשף או מנהל הסיסמאות שלכם).",
+  "pl.mintTitle": "נוצרו פרטי גישה חדשים — שמרו אותם עכשיו",
+  "pl.mintBody":
+    "בדפדפן הזה היה סוכן ללא פרטי גישה לפורטל, אז נטבעה סט חדש. השתמשו בהם למטה — ושמרו אותם במקום בטוח.",
+  "pl.fUser": "שם משתמש בפורטל",
+  "pl.fToken": "טוקן פורטל",
+  "pl.hint":
+    "פרטי הגישה נשמרים ב-localStorage של הדפדפן — אם שמרתם במקום אחר, עיינו במסך \u201cפרטי גישה\u201d בסוף האשף.",
+  "pl.lost": "איבדתם גישה במכשיר הזה?",
+  "pl.reset": "איפוס לברירת מחדל",
+  "pl.resetConfirm": "לאפס את נתוני הסוכן בדפדפן זה ולהתחיל אשף מחדש?",
+  "pl.toastTitle": "הגישה אושרה",
+  "pl.toastBody": "ברוך שובך, {name}.",
+  "boot.label": "אתחול סוכן",
+  "boot.enter": "כניסה לקונסולת הסוכן",
+  "tab.overview": "סקירה",
+  "tab.console": "קונסולה",
+  "tab.channels": "ערוצים",
+  "tab.brains": "מוחות",
+  "tab.tools": "כלים · mcp",
+  "tab.instances": "מכונות",
+  "tab.activity": "פעילות",
+  "act.lock": "נעילה",
+  "act.reset": "איפוס",
+  "dash.activeUp": "פעיל · {uptime}",
+  "dash.resetTitle": "לאפס את הסוכן להגדרות יצרן?",
+  "dash.resetBody":
+    "מוחק את פרופיל המפעיל, הערוצים, שרשרת הספקים, הכלים והזיכרון במכשיר זה. יהיה צורך לאתחל את הסוכן מחדש.",
+  "dash.resetCancel": "להשאיר רץ",
+  "dash.resetConfirm": "למחוק ולהפעיל מחדש",
+  "stat.uptime": "זמן פעילות",
+  "stat.channels": "ערוצים",
+  "stat.chain": "שרשרת גיבוי",
+  "stat.tools": "כלים דרוכים",
+  "stat.machines": "מכונות מחוברות",
+  "stat.notPaired": "טלגרם לא מצומד",
+  "stat.demoBrain": "מוח דמו",
+  "stat.primary": "ראשי: {name}",
+  "stat.brains": "{n} מוחות",
+  "stat.cycles": "{n} מחזורי לופ",
+  "stat.sshTunnel": "ssh + מנהרה",
+  "stat.pairInstances": "צמדו מלשונית המכונות",
+  "loop.title": "לופ חי — {agent} עובד 24/7",
+  "loop.warming": "הלופ מתחמם — הטיק הראשון בעוד רגע…",
+  "missions.title": "משימות",
+  "missions.body": "פקודות קבועות מהאשף. {agent} בונה את הלופ שלו סביבן:",
+  "portal.title": "גישה לפורטל",
+  "portal.hint":
+    "שם משתמש + טוקן פותחים את הקונסולה בכל מכשיר · טוקן הצימוד נשלח לבוט בטלגרם",
+  "skills.title": "רישום כישורים",
+  "skills.body":
+    "הסוכן בונה עם zcode-smart-skill v2 (GVS5H) וכותב כישורים חדשים משלו כשמשימה דורשת.",
+  "actlog.title": "יומן פעילות מלא",
+  "actlog.events": "{n} אירועים",
+  "actlog.empty": "עדיין אין אירועים.",
+  "foot.tasks": "{n} משימות הושלמו בסשן זה",
+  "cs.title": "קונסולת {agent}",
+  "cs.machines": "{n} מכונות מחוברות",
+  "cs.noMachines": "אין מכונות מחוברות",
+  "cs.brainsArmed": "{n} מוחות דרוכים",
+  "cs.emptyTitle": "פקדו על {agent} ישירות",
+  "cs.emptyBody":
+    "משימות, מחקר, אוטומציה, קוד — עונה בשיקול דעתו ועם הכלים שלו.",
+  "cs.working": "{agent} עובד על שרשרת הגיבוי…",
+  "cs.hint": "enter לשליחה",
+  "cs.placeholder": "ספרו ל-{agent} מה לעשות… (Enter לשליחה, Shift+Enter לשורה חדשה)",
+  "cs.sug1": "מה אתה יודע לעשות?",
+  "cs.sug2": "תכנן לי את היום ותעשה תדריך",
+  "cs.sug3": "הגדר cron למעקב אחרי מחיר",
+  "cs.sug4": "כתוב סקריפט שמארגן את ההורדות שלי",
+  "cs.toastFailTitle": "אף מוח לא ענה",
+  "cs.toastFailBody": "בדקו את הספקים או הוסיפו גיבוי.",
+  "wz.step1": "מפעיל",
+  "wz.step2": "טלגרם",
+  "wz.step3": "מוחות AI",
+  "wz.step4": "הנחיות",
+  "wz.step5": "אתחול",
+  "wz.back": "← חזרה",
+  "wz.nextTelegram": "המשך: חיבור הטלגרם →",
+  "wz.nextBrains": "המשך: חיבור מוחות AI →",
+  "wz.nextShape": "המשך: עיצוב ההתנהגות →",
+  "wz.skipDemo": "דלגו — מוח דמו →",
+  "wz.pickFocus": "בחרו לפחות תחום אחד",
+  "wz.reviewNext": "סקירה ואתחול →",
+  "wz.reviewTitle": "הכול מוכן. לאתחל?",
+};
+
+const DICTS: Record<Lang, Record<string, string>> = { en, ru, he };
+
+export function translate(lang: Lang, key: string): string {
+  return DICTS[lang]?.[key] ?? en[key] ?? key;
+}
+
+export function formatTemplate(tpl: string, vars?: Record<string, string | number>): string {
+  if (!vars) return tpl;
+  let s = tpl;
+  for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v));
+  return s;
+}
+
+/** Hook: const t = useT(); t("stat.primary", { name }) */
+export function useT() {
+  const lang = useDeepInit((s) => s.uiLang);
+  return (key: string, vars?: Record<string, string | number>) =>
+    formatTemplate(translate(lang, key), vars);
+}
