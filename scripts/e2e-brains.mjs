@@ -27,35 +27,31 @@ async function main() {
   await page.goto(BASE, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1500);
 
-  /* ---------- wizard (fast path) ---------- */
-  const initBtn = page.locator("text=Initialize your agent").first();
-  if (await initBtn.isVisible().catch(() => false)) {
-    await initBtn.click();
-    await page.waitForTimeout(800);
-  }
-  // step through the wizard: next through all steps, fill profile on step 1
-  for (let i = 0; i < 8; i++) {
-    // if a name input exists, fill it
-    const nameInput = page.locator('input[placeholder*="name" i], input[placeholder*="Roman" i]').first();
-    if (await nameInput.isVisible().catch(() => false)) {
-      await nameInput.fill("Roman", { timeout: 2000 }).catch(() => {});
-    }
-    const next = page.locator('button:has-text("Next"), button:has-text("Далее"), button:has-text("הבא")').last();
-    if (!(await next.isVisible().catch(() => false))) break;
-    const disabled = await next.isDisabled().catch(() => true);
-    if (disabled && i === 0) {
-      // maybe profile fields need agent name too
-      const agentInput = page.locator('input[placeholder*="agent" i]').first();
-      if (await agentInput.isVisible().catch(() => false)) await agentInput.fill("Init").catch(() => {});
-    }
-    await next.click().catch(() => {});
-    await page.waitForTimeout(700);
-  }
-  // final init command button (sudo init --agent)
-  const initCmd = page.locator('button:has-text("sudo init --agent")').first();
-  if (await initCmd.isVisible().catch(() => false)) {
-    await initCmd.click();
-  }
+  /* ---------- wizard (fast path, real selectors) ---------- */
+  await page.locator("text=Initialize your agent").first().click();
+  await page.waitForTimeout(1000);
+  // step 1 — identity
+  await page.locator("#displayName").fill("Roman");
+  await page.locator("#agentName").fill("Init");
+  await page.locator('button:has-text("Next: connect telegram")').click();
+  await page.waitForTimeout(1000);
+  // step 2 — channels: skip (pair later)
+  const skipTg = page.locator('button:has-text("Next: connect AI brains")').first();
+  await skipTg.click();
+  await page.waitForTimeout(1000);
+  // step 3 — providers: skip (demo brain keeps running with no provider)
+  const provNext = page
+    .locator('button:has-text("Next: shape its behavior"), button:has-text("Skip — use demo brain")')
+    .first();
+  await provNext.click();
+  await page.waitForTimeout(1000);
+  // step 4 — questionnaire: pick a focus goal (enables continue), then review
+  await page.locator('button:has-text("Research & briefings")').first().click();
+  await page.waitForTimeout(400);
+  await page.locator('button:has-text("Review & initialize")').click();
+  await page.waitForTimeout(1000);
+  // step 5 — review → sudo init --agent
+  await page.locator('button:has-text("sudo init --agent")').click();
   // wait until dashboard (cognition tab present)
   await page.waitForSelector('button:has-text("cognition"), [role="button"]:has-text("cognition")', { timeout: 30000 });
   ok("wizard → dashboard (cognition tab present)", true);
