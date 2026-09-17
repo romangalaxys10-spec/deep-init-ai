@@ -12,7 +12,7 @@ import { RichText } from "./rich-text";
 import { getPreset } from "@/lib/presets";
 import { BRAIN_STARTERS, enabledBrains } from "@/lib/brains";
 import { MonoLabel, StatusDot } from "./ui-bits";
-import { MicButton, VoiceControls, useSpeak } from "./voice";
+import { MicButton, VoiceBar, VoiceControls, VoiceModeButton, useSpeak, useVoiceMode } from "./voice";
 
 const BASE_SUGGESTIONS = ["cs.sug1", "cs.sug2", "cs.sug3", "cs.sug4"];
 
@@ -36,6 +36,8 @@ export function AgentConsole() {
   const tunnels = useDeepInit((s) => s.tunnels);
   const skills = useDeepInit((s) => s.skills);
   const voice = useDeepInit((s) => s.voice);
+  const setVoice = useDeepInit((s) => s.setVoice);
+  const uiLang = useDeepInit((s) => s.uiLang);
   const logActivity = useDeepInit((s) => s.logActivity);
   const { toast } = useToast();
   const { speak, speakingId, stop } = useSpeak();
@@ -44,6 +46,31 @@ export function AgentConsole() {
   const [sending, setSending] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  /* voice mode — hands-free conversation loop (see useVoiceMode) */
+  const voiceModeRef = useRef<ReturnType<typeof useVoiceMode> | null>(null);
+  const voiceMode = useVoiceMode({
+    onSend: (text) => send(text),
+    lang: uiLang === "ru" ? "ru-RU" : uiLang === "he" ? "he-IL" : "en-US",
+  });
+  useEffect(() => {
+    voiceModeRef.current = voiceMode;
+  }, [voiceMode]);
+
+  const toggleVoiceMode = () => {
+    if (voiceMode.state !== "off") {
+      stop();
+      voiceMode.stop();
+      return;
+    }
+    if (!voiceMode.supported) {
+      toast({ title: t("vm.unsupportedTitle"), description: t("vm.unsupportedBody"), variant: "destructive" });
+      return;
+    }
+    if (!voice.enabled) setVoice({ enabled: true });
+    voiceMode.start();
+    logActivity({ kind: "message", title: "Voice mode session started", detail: `locale ${uiLang}` });
+  };
 
   const visible = useMemo(() => messages.filter((m) => m.role !== "system"), [messages]);
 
@@ -60,20 +87,34 @@ export function AgentConsole() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [visible.length, sending]);
 
-  // auto-speak new assistant replies
+  // speak new assistant replies — auto-speak setting, or always during a voice session
   const lastSpokenRef = useRef<string | null>(null);
+  const voiceModeActiveRef = useRef(false);
   useEffect(() => {
-    if (!voice.enabled || !voice.autoSpeak) return;
+    voiceModeActiveRef.current = voiceMode.state !== "off";
+  }, [voiceMode.state]);
+  useEffect(() => {
+    if (!voice.enabled) return;
+    if (!voice.autoSpeak && !voiceModeActiveRef.current) return;
+    if (sending) return; // wait for the stream to finish — speak the final text only
     const last = visible[visible.length - 1];
     if (last && last.role === "assistant" && last.content && last.id !== lastSpokenRef.current) {
       lastSpokenRef.current = last.id;
-      speak(last.content, last.id);
+      void Promise.resolve(
+        speak(last.content, last.id, () => voiceModeRef.current?.listenAgain())
+      ).then((played) => {
+        // TTS unavailable → resume listening anyway so the session keeps flowing
+        if (!played) voiceModeRef.current?.listenAgain();
+      });
     }
-  }, [visible, voice.enabled, voice.autoSpeak, speak]);
+  }, [visible, voice.enabled, voice.autoSpeak, sending, speak]);
 
   const send = async (text?: string) => {
     const content = (text ?? input).trim();
     if (!content || sending) return;
+
+    // voice session: pause the mic while this message is in flight
+    voiceModeRef.current?.hold();
 
     setInput("");
     setSending(true);
@@ -229,6 +270,7 @@ export function AgentConsole() {
               ? t("cs.brainsArmed", { n: enabledProviders.length, s: enabledProviders.length > 1 ? "s" : "" })
               : t("stat.demoBrain")}
           </span>
+          <VoiceModeButton state={voiceMode.state} onToggle={toggleVoiceMode} />
           <VoiceControls speak={speak} />
         </div>
       </div>
@@ -285,6 +327,7 @@ export function AgentConsole() {
 
       {/* input */}
       <div className="border-t border-border/70 p-3">
+        <VoiceBar state={voiceMode.state} interim={voiceMode.interim} />
         <div className="flex items-end gap-2">
           <span className="pb-3 font-mono text-sm text-primary">❯</span>
           <Textarea
@@ -300,7 +343,7 @@ export function AgentConsole() {
             className="min-h-[52px] flex-1 resize-none border-0 bg-transparent text-sm shadow-none focus-visible:ring-0"
             rows={2}
           />
-          <MicButton onText={(t) => setInput((cur) => (cur ? `${cur} ${t}` : t))} />
+          {voiceMode.state === "off" && <MicButton onText={(t) => setInput((cur) => (cur ? `${cur} ${t}` : t))} />}
           <Button onClick={() => send()} disabled={sending || !input.trim()} size="icon" className="mb-1 h-9 w-9 shrink-0" aria-label="Send">
             <Send className="h-4 w-4" />
           </Button>
