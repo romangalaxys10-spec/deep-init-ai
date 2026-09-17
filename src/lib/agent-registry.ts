@@ -9,12 +9,14 @@ import type { ChatRequest } from "./types";
  * webhook (or the browser-driven poll bridge), we look up the agent
  * config bound to that bot/chat and run the provider fallback chain.
  *
- * Storage strategy:
+ * Storage strategy (serverless-friendly):
+ * - production: Vercel Blob (`gateway/registry.json`) — shared across
+ *   lambda instances, so webhooks always find the agent config.
+ *   Handlers call refreshRegistry() on entry and persistRegistry()
+ *   after mutating (last-write-wins at this scale).
  * - dev: JSON file under <cwd>/.gateway → shared across Next.js dev
- *   worker processes (a pure globalThis map gets split across workers)
- * - production (Vercel): read-only FS → in-memory per warm instance.
- *   The dashboard auto-resyncs its config, so cold instances heal as
- *   soon as the portal is opened.
+ *   worker processes (a pure globalThis map gets split across workers).
+ * - fallback: in-memory.
  * ============================================================ */
 
 export type ChatMode = "owner" | "shared" | "isolated";
@@ -60,10 +62,15 @@ export interface RegisteredAgent {
 const MAX_THREAD = 24;
 const AGENT_TTL_MS = 24 * 60 * 60 * 1000;
 
-/* ---------------- file-backed store ---------------- */
+/* ---------------- in-process memory layer ---------------- */
 
-const g = globalThis as unknown as { __diAgents?: Map<string, RegisteredAgent> };
+const g = globalThis as unknown as {
+  __diAgents?: Map<string, RegisteredAgent>;
+  __diBlobFetchedAt?: number;
+};
 const mem: Map<string, RegisteredAgent> = (g.__diAgents ??= new Map());
+
+/* ---------------- file store (dev) ---------------- */
 
 let fsEnabled: boolean | null = null;
 
@@ -90,6 +97,46 @@ function fsWorks(): boolean {
   }
 }
 
+/* ---------------- blob store (production) ---------------- */
+
+const BLOB_PATH = "gateway/registry.json";
+
+function blobEnabled(): boolean {
+  return Boolean(process.env.BLOB_READ_WRITE_TOKEN) && process.env.NODE_ENV === "production";
+}
+
+async function blobReadRaw(): Promise<{ raw: string | null; etag: string | null }> {
+  try {
+    const { get } = await import("@vercel/blob");
+    // useCache:false is CRITICAL — private blob reads are cached per edge by
+    // default, which serves stale registry state to other lambda instances
+    const res = await get(BLOB_PATH, { access: "private", useCache: false });
+    if (!res?.stream) return { raw: null, etag: null };
+    const etag = res.headers?.get("etag") ?? null;
+    const reader = res.stream.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    const bytes = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
+    let off = 0;
+    for (const c of chunks) {
+      bytes.set(c, off);
+      off += c.length;
+    }
+    return { raw: new TextDecoder().decode(bytes), etag };
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "";
+    if (name === "BlobNotFoundError") return { raw: null, etag: null };
+    console.error("[registry:blob-read]", name || e);
+    return { raw: null, etag: null };
+  }
+}
+
+/* ---------------- serialization ---------------- */
+
 interface SerializedAgent extends Omit<RegisteredAgent, "chats"> {
   chats: ChatState[];
 }
@@ -111,47 +158,100 @@ function hydrate(raw: Record<string, SerializedAgent>): Map<string, RegisteredAg
   return map;
 }
 
-function loadAll(): Map<string, RegisteredAgent> {
-  if (!fsWorks()) return mem;
-  try {
-    const file = storeFile();
-    if (!existsSync(file)) return mem;
-    const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, SerializedAgent>;
-    const fromDisk = hydrate(raw);
-    // merge disk over memory so any worker sees the latest state
-    for (const [k, a] of fromDisk) {
-      const m = mem.get(k);
-      if (!m || m.lastSeen < a.lastSeen) mem.set(k, a);
-    }
-    return mem;
-  } catch {
-    return mem;
+/* ---------------- refresh / persist ---------------- */
+
+function mergeIntoMem(fromDisk: Map<string, RegisteredAgent>) {
+  for (const [k, a] of fromDisk) {
+    const m = mem.get(k);
+    if (!m || m.lastSeen < a.lastSeen) mem.set(k, a);
   }
 }
 
-function saveAll(agents: Map<string, RegisteredAgent>) {
-  if (!fsWorks()) return;
-  try {
-    mkdirSync(path.join(process.cwd(), ".gateway"), { recursive: true });
-    writeFileSync(storeFile(), serialize(agents));
-  } catch {
-    /* read-only fs (production) — memory is the fallback */
-  }
-}
+const REFRESH_DEDUPE_MS = 1_200;
 
-function sweep(agents: Map<string, RegisteredAgent>) {
+/**
+ * Pull the latest state into the in-process memory map.
+ * Call at the start of every gateway request.
+ * `force` bypasses the per-instance dedupe cache — used to heal
+ * cross-instance eventual-consistency windows after a miss.
+ */
+export async function refreshRegistry(opts?: { force?: boolean }): Promise<void> {
   const now = Date.now();
-  let dirty = false;
-  for (const [key, a] of agents) {
-    if (now - a.lastSeen > AGENT_TTL_MS) {
-      agents.delete(key);
-      dirty = true;
+  if (blobEnabled()) {
+    if (!opts?.force && g.__diBlobFetchedAt && now - g.__diBlobFetchedAt < REFRESH_DEDUPE_MS) return;
+    g.__diBlobFetchedAt = now;
+    const { raw } = await blobReadRaw();
+    if (raw) {
+      try {
+        mergeIntoMem(hydrate(JSON.parse(raw) as Record<string, SerializedAgent>));
+      } catch {
+        /* corrupt blob — start fresh from mem */
+      }
+    }
+    return;
+  }
+  if (fsWorks()) {
+    try {
+      const file = storeFile();
+      if (!existsSync(file)) return;
+      mergeIntoMem(hydrate(JSON.parse(readFileSync(file, "utf8")) as Record<string, SerializedAgent>));
+    } catch {
+      /* unreadable file — keep mem */
     }
   }
-  return dirty;
 }
 
-/* ---------------- public API ---------------- */
+/**
+ * Push the in-memory state to the shared store.
+ *
+ * Blob mode re-reads the latest state and merges it into memory before
+ * writing (last-write-wins with a merge window of one round-trip). This
+ * keeps concurrent lambda instances converging instead of clobbering
+ * each other's registrations and chat bindings.
+ */
+export async function persistRegistry(): Promise<void> {
+  if (blobEnabled()) {
+    try {
+      const { raw } = await blobReadRaw(); // fresh read for the merge
+      if (raw) {
+        try {
+          mergeIntoMem(hydrate(JSON.parse(raw) as Record<string, SerializedAgent>));
+        } catch {
+          /* corrupt blob — overwrite with mem */
+        }
+      }
+      const { put } = await import("@vercel/blob");
+      await put(BLOB_PATH, serialize(mem), {
+        access: "private",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      });
+      g.__diBlobFetchedAt = Date.now();
+    } catch (e) {
+      const name = e instanceof Error ? e.name : "";
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[registry:blob-write]", name, msg.slice(0, 200));
+    }
+    return;
+  }
+  if (fsWorks()) {
+    try {
+      mkdirSync(path.join(process.cwd(), ".gateway"), { recursive: true });
+      writeFileSync(storeFile(), serialize(mem));
+    } catch {
+      /* read-only fs — memory is the fallback */
+    }
+  }
+}
+
+/* ---------------- agent operations (in-memory, sync) ---------------- */
+
+function sweep() {
+  const now = Date.now();
+  for (const [key, a] of mem) {
+    if (now - a.lastSeen > AGENT_TTL_MS) mem.delete(key);
+  }
+}
 
 export interface RegisterInput {
   key: string;
@@ -168,9 +268,8 @@ export interface RegisterInput {
 }
 
 export function registerAgent(input: RegisterInput): RegisteredAgent {
-  const agents = loadAll();
-  sweep(agents);
-  const prev = agents.get(input.key);
+  sweep();
+  const prev = mem.get(input.key);
   const agent: RegisteredAgent = {
     ...input,
     providers: (input.providers || []).filter((p) => p && p.baseUrl && p.model).slice(0, 10),
@@ -182,23 +281,19 @@ export function registerAgent(input: RegisterInput): RegisteredAgent {
     sharedThread: prev?.sharedThread ?? [],
     recentReplies: prev?.recentReplies ?? [],
   };
-  agents.set(input.key, agent);
-  saveAll(agents);
+  mem.set(input.key, agent);
   return agent;
 }
 
 export function getAgent(key: string | null | undefined): RegisteredAgent | undefined {
   if (!key) return undefined;
-  // read-only: never mutate here, otherwise the in-memory copy's lastSeen
-  // inflates above the disk copy and stale state wins the merge
-  return loadAll().get(key);
+  return mem.get(key);
 }
 
 /** All agents wired to a given bot token (the built-in bot hosts many users). */
 export function agentsForBot(botToken: string): RegisteredAgent[] {
-  const agents = loadAll();
-  if (sweep(agents)) saveAll(agents);
-  return [...agents.values()].filter((a) => a.botToken === botToken);
+  sweep();
+  return [...mem.values()].filter((a) => a.botToken === botToken);
 }
 
 /** The agent whose chat map already contains this chat (i.e. it was paired). */
@@ -244,14 +339,12 @@ export function bindChat(
   };
   agent.chats.set(chatId, state);
   agent.lastSeen = Date.now();
-  touchAgent(agent);
   return state;
 }
 
-/** Call after mutating threads / replies / offsets on a live agent. */
+/** Marks the agent as touched; call persistRegistry() in the handler afterwards. */
 export function touchAgent(agent: RegisteredAgent) {
   agent.lastSeen = Date.now();
-  saveAll(loadAll());
 }
 
 export function pushThread(thread: ChatMsg[], msg: ChatMsg) {

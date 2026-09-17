@@ -263,6 +263,7 @@ export function GatewayPanel({
   }, [telegram, logActivity, toast, updateChannel]);
 
   /* status poll — every 8s while the tab shows this panel */
+  const lastAutoResync = useRef(0);
   useEffect(() => {
     if (!sessionKey) {
       setStatus(null);
@@ -280,6 +281,12 @@ export function GatewayPanel({
         if (!alive) return;
         setStatus(data);
         onBoundTokens(data.boundTokens || []);
+        // self-heal: if the shared registry lost this session (blob race,
+        // cold start, redeploy), push the config again — throttled to 60s
+        if (data.ok && !data.registered && Date.now() - lastAutoResync.current > 60_000) {
+          lastAutoResync.current = Date.now();
+          window.dispatchEvent(new Event("di-resync"));
+        }
       } catch {
         /* offline — keep last status */
       }

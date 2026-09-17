@@ -36,8 +36,8 @@ Browser (Next.js 16, React 19, Tailwind 4, shadcn/ui, zustand+persist)
 
 **Gateway registry** (`src/lib/agent-registry.ts`) keeps per-agent runtime config (bot token, system prompt, provider chain, whitelist, bound chats, threads):
 
-- **dev** — JSON file under `.gateway/` so state is shared across Next.js worker processes
-- **production** — in-memory per warm instance; the dashboard auto-resyncs the config, healing cold starts. Registry TTL is 24 h of inactivity.
+- **production** — Vercel Blob (`gateway/registry.json`, private store, `useCache: false` reads + merge-before-write) so the state is shared across lambda instances. Registry TTL is 24 h of inactivity; the dashboard auto-resyncs its config, healing cold starts.
+- **dev** — JSON file under `.gateway/` so state is shared across Next.js worker processes.
 
 **Pairing flow** — `findByPairingToken` matches an incoming `DIP-…` message against owner + whitelist tokens of every agent on that bot, binds the chat (`owner` / `shared` / `isolated` mode), then serves every further message from the matched thread with a per-user context line injected into the system prompt.
 

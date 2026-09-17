@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAgent, touchAgent } from "@/lib/agent-registry";
+import { getAgent, persistRegistry, refreshRegistry } from "@/lib/agent-registry";
 import { handleTelegramUpdate, tgGetUpdates, type TelegramUpdate } from "@/lib/telegram";
 
 export const maxDuration = 60;
@@ -29,6 +29,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await refreshRegistry();
     const res = await tgGetUpdates(agent.botToken, agent.offset ?? 0);
     if (!res.ok || !res.result) {
       const desc = res.description || "getUpdates failed";
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
 
     agent.offset = maxId;
     agent.lastSeen = Date.now();
-    touchAgent(agent);
+    await persistRegistry();
 
     return NextResponse.json({ ok: true, processed, replies });
   } catch (e) {

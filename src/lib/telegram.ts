@@ -5,9 +5,11 @@ import {
   findByPairingToken,
   pushThread,
   recordReply,
+  refreshRegistry,
   touchAgent,
   type ChatMsg,
   type RegisteredAgent,
+  type TokenMatch,
 } from "./agent-registry";
 import { runAgentChain } from "./brain";
 import type { GatewayChat } from "./types";
@@ -126,6 +128,27 @@ export interface UpdateOutcome {
   error?: string;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Blob storage is eventually consistent: an agent freshly registered on
+ * another instance may not be visible yet. Retry with a forced registry
+ * refresh before giving up — this heals the race between pairing in the
+ * portal and the first Telegram message arriving via webhook.
+ */
+async function lookupWithRetry(botToken: string, token: string): Promise<TokenMatch | undefined> {
+  const first = findByPairingToken(botToken, token);
+  if (first) return first;
+  const delays = [400, 900];
+  for (const d of delays) {
+    await sleep(d);
+    await refreshRegistry({ force: true });
+    const match = findByPairingToken(botToken, token);
+    if (match) return match;
+  }
+  return undefined;
+}
+
 function contextLine(agent: RegisteredAgent, mode: string, userName: string): string {
   if (mode === "owner") {
     return `\n\n[Context: you are chatting with ${agent.ownerName} — your owner and operator, via Telegram. This is the main shared thread.]`;
@@ -159,13 +182,22 @@ export async function handleTelegramUpdate(
   const text = msg.text.trim();
 
   /* 1) already-bound chat wins */
-  const boundAgent = findBoundAgent(botToken, chatId);
-  const boundChat = boundAgent?.chats.get(chatId);
+  let boundAgent = findBoundAgent(botToken, chatId);
+  let boundChat = boundAgent?.chats.get(chatId);
+
+  /* heal cross-instance staleness: re-pull the registry once before
+     nudging an unbound sender (cheap — only when not yet paired) */
+  if (!boundAgent && !/^\/start/i.test(text)) {
+    await sleep(120);
+    await refreshRegistry({ force: true });
+    boundAgent = findBoundAgent(botToken, chatId);
+    boundChat = boundAgent?.chats.get(chatId);
+  }
 
   /* 2) pairing token in the message */
   const tokenMatch = text.match(TOKEN_RE);
   if (tokenMatch) {
-    const match = findByPairingToken(botToken, tokenMatch[0]);
+    const match = await lookupWithRetry(botToken, tokenMatch[0]);
     if (!match) {
       if (boundAgent) {
         await replyAndRecord(

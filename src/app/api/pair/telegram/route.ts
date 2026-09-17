@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { registerAgent } from "@/lib/agent-registry";
+import { persistRegistry, refreshRegistry, registerAgent } from "@/lib/agent-registry";
 import { BUILTIN_BOT_TOKEN, tgDeleteWebhook, tgGetMe, tgSetWebhook } from "@/lib/telegram";
 import type { ChatRequest } from "@/lib/types";
 
@@ -62,6 +62,8 @@ export async function POST(req: NextRequest) {
 
   const botToken = mode === "own" ? (body.token as string) : BUILTIN_BOT_TOKEN;
 
+  await refreshRegistry();
+
   /* live-verify the bot identity with Telegram */
   try {
     const me = await tgGetMe(botToken);
@@ -92,6 +94,7 @@ export async function POST(req: NextRequest) {
         allowDemoBrain: cfg.allowDemoBrain !== false,
         whitelist: Array.isArray(cfg.whitelist) ? cfg.whitelist : [],
       });
+      await persistRegistry();
     }
 
     /* webhook on public origins, poll bridge on localhost */

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { persistRegistry, refreshRegistry } from "@/lib/agent-registry";
 import { handleTelegramUpdate, type TelegramUpdate } from "@/lib/telegram";
 import { BUILTIN_BOT_TOKEN } from "@/lib/telegram";
 
@@ -34,7 +35,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await refreshRegistry();
     const outcome = await handleTelegramUpdate(update, botToken);
+    await persistRegistry();
     return NextResponse.json({ ok: true, ...outcome });
   } catch (e) {
     console.error("[telegram:webhook]", e);

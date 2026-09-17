@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAgent } from "@/lib/agent-registry";
+import { getAgent, refreshRegistry } from "@/lib/agent-registry";
 import { gatewayStatus } from "@/lib/telegram";
 import type { GatewayStatus } from "@/lib/types";
 
@@ -17,12 +17,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
   }
 
+  await refreshRegistry();
+
   const agent = getAgent(body.key);
   if (!agent) {
     const payload: GatewayStatus = { registered: false, chats: [], recentReplies: [], boundTokens: [] };
     return NextResponse.json({ ok: true, ...payload });
   }
-
   const { chats, boundTokens } = gatewayStatus(agent);
   const payload: GatewayStatus = {
     registered: true,
