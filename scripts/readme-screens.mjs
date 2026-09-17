@@ -9,8 +9,34 @@ const BASE = process.env.BASE_URL || "https://deep-init-ai.vercel.app";
 const OUT = "docs/screenshots";
 mkdirSync(OUT, { recursive: true });
 
-const shot = (page, name, opts = {}) =>
-  page.screenshot({ path: `${OUT}/${name}.png`, animations: "disabled", ...opts });
+const shot = async (page, name, opts = {}) => {
+  await maskSecrets(page);
+  await page.screenshot({ path: `${OUT}/${name}.png`, animations: "disabled", ...opts });
+};
+
+/** Replace live credentials with masked glyphs so screenshots are safe for a public README. */
+async function maskSecrets(page) {
+  try {
+    await page.evaluate(() => {
+      const walk = (el) => {
+        for (const node of el.childNodes) {
+          if (node.nodeType === Node.TEXT_NODE) {
+            const t = node.textContent || "";
+            let out = t.replace(/di_[a-zA-Z0-9]{6,}/g, "di_••••••••••••••••");
+            out = out.replace(/DIP-[A-Z0-9]{4,5}-[A-Z0-9]{4,5}/g, "DIP-••••-••••");
+            if (out !== t) node.textContent = out;
+          } else if (node.nodeType === Node.ELEMENT_NODE) {
+            const tag = node.tagName;
+            if (tag !== "SCRIPT" && tag !== "STYLE") walk(node);
+          }
+        }
+      };
+      walk(document.body);
+    });
+  } catch {
+    /* masking is best-effort */
+  }
+}
 
 async function main() {
   const browser = await chromium.launch();
