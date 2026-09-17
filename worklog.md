@@ -55,3 +55,23 @@ Stage Summary:
 - Telegram now actually answers: pairing token → Paired ✓ → provider-chain replies, shared/isolated whitelist, built-in + own bots, webhook (prod) / poll bridge (dev).
 - Portal logins minted in wizard gate the console; pairing tokens minted in wizard/channels gate the bot.
 - Known limits: demo brain only where .z-ai-config exists (configure a real provider on Vercel); registry TTL 24h + dashboard auto-resync heals cold starts; poll bridge only runs while a portal tab is open (webhook covers 24/7 on prod).
+
+---
+Task ID: 3
+Agent: Super Z (main)
+Task: Fix init→landing bug, ensure portal login/re-login, bright rene.co-inspired redesign, publish GitHub, deploy Vercel
+
+Work Log:
+- Root-caused "init lands on main page": BootSequence activate() → view=dashboard, but page.tsx gate `authed` (sessionStorage di-portal-auth) was never set on first session → PortalLogin shown instead of dashboard
+- Fix: Wizard onInitialize now sets sessionStorage auth + setAuthed(true) → boot → straight into console (src/app/page.tsx)
+- PortalLogin hardened: lazy-initializer escape hatch auto-mints credentials if missing (legacy locked-out state), case-insensitive user/token match, "new credentials generated" banner with CopyFields (src/components/deepinit/portal-login.tsx)
+- Bright redesign (rene.co-inspired): globals.css full token flip (ivory bg oklch 0.977/88, coral primary oklch 0.665/41, peach secondary, espresso fg), soft color-blob + dotted-grid canvas, warm glow/sheen/sweep, both :root and .dark identical; layout.tsx dark class removed + themeColor #faf5ec; button.tsx pill rounded-full (sm/lg too); Panel rounded-2xl + soft warm shadow; instances-panel code blocks bg-stone-900/text-stone-100; landing pastel traffic dots + footer credit "made using GLM 5.3 FLASH · by Roman · www.rommark.dev"
+- Browser-verified (agent-browser): full wizard (Roman/Init) → sudo init --agent → dashboard directly ✓; Lock → PortalLogin → re-login with roman/di_454152cc… ✓; reload keeps session ✓; sessionStorage cleared → lock screen ✓; channels tab whitelist UI bright ✓; built-in bot pairing via real API ✓ gatewayMode poll (local)
+- ESLint --max-warnings=0 clean, tsc clean (src)
+- GitHub: pushed 86940da (design+login) and 3c82f6c (harden findByPairingToken vs malformed entries) → github.com/romangalaxys10-spec/deep-init-ai
+- Vercel: production deploy Ready (deep-init-ai.vercel.app), env BLOB_READ_WRITE_TOKEN + BUILTIN_TELEGRAM_BOT_TOKEN present; prod pair API verified gatewayMode webhook; setWebhook registered for @init_smart_bot → https://deep-init-ai.vercel.app/api/telegram/webhook (getWebhookInfo confirmed); vercel git connect failed (needs Vercel GitHub App access to repo) — manual deploy path documented
+
+Stage Summary:
+- All 3 user asks complete: (1) init→dashboard bug fixed & verified, (2) user/token login/re-login verified, (3) bright rene.co-inspired redesign live on production
+- Production: https://deep-init-ai.vercel.app (HTTP 200, bright theme, webhook armed for builtin bot)
+- Repo: https://github.com/romangalaxys10-spec/deep-init-ai (main @ 3c82f6c)
