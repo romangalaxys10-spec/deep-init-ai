@@ -84,6 +84,97 @@ export function htmlToPlain(h: string): string {
     .replace(/&amp;/g, "&");
 }
 
+/* ============================================================
+ * Long-code → file attachments ("no walls of code in chat").
+ * Blocks over the size/line threshold are pulled out of the
+ * message and delivered as real documents (Telegram sendDocument /
+ * web download button); the chat keeps a short note + snippet.
+ * ============================================================ */
+
+export const CODE_FILE_MAX_CHARS = 1200;
+export const CODE_FILE_MAX_LINES = 25;
+export const SNIPPET_LINES = 6;
+
+const LANG_EXT: Record<string, string> = {
+  js: "js", javascript: "js", mjs: "mjs", cjs: "cjs",
+  ts: "ts", typescript: "ts", tsx: "tsx", jsx: "jsx",
+  py: "py", python: "py", rb: "rb", ruby: "rb", php: "php",
+  html: "html", css: "css", scss: "scss", json: "json",
+  yaml: "yaml", yml: "yml", toml: "toml", xml: "xml", md: "md", markdown: "md",
+  sh: "sh", bash: "sh", shell: "sh", zsh: "sh", powershell: "ps1", ps1: "ps1",
+  sql: "sql", go: "go", golang: "go", rust: "rs", rs: "rs",
+  java: "java", kotlin: "kt", kt: "kt", swift: "swift", dart: "dart",
+  c: "c", cpp: "cpp", "c++": "cpp", csharp: "cs", "cs": "cs", "c#": "cs",
+  txt: "txt", text: "txt", ini: "ini", env: "env", diff: "diff", dockerfile: "Dockerfile",
+};
+
+export function extForLang(lang: string): string {
+  return LANG_EXT[lang.trim().toLowerCase()] || "txt";
+}
+
+/** Pick a friendly filename: `// notes.md`-style first-line comment wins, else snippet-N.ext */
+export function suggestFilename(lang: string, code: string, index: number): string {
+  const first = (code.split("\n", 1)[0] || "").trim();
+  const comment = /^.{0,4}(?:\/\/|#|\/\*|<!--|;)\s*([\w.\-\/]+\.[A-Za-z0-9]{1,8})\s*(?:\*\/|-->)?$/.exec(
+    first
+  );
+  if (comment) {
+    const base = comment[1].split("/").pop() || comment[1];
+    if (base.length <= 64) return base;
+  }
+  return `snippet-${index + 1}.${extForLang(lang)}`;
+}
+
+export interface CodeFile {
+  filename: string;
+  lang: string;
+  content: string;
+  lines: number;
+  bytes: number;
+}
+
+function kb(bytes: number): string {
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+/**
+ * Pull oversized code blocks out of a markdown reply.
+ * Returns the rewritten markdown (each block replaced by a note + short
+ * snippet) plus the files to attach. Short blocks pass through untouched.
+ */
+export function extractFileAttachments(
+  md: string,
+  opts?: { maxChars?: number; maxLines?: number }
+): { md: string; files: CodeFile[] } {
+  const maxChars = opts?.maxChars ?? CODE_FILE_MAX_CHARS;
+  const maxLines = opts?.maxLines ?? CODE_FILE_MAX_LINES;
+
+  const files: CodeFile[] = [];
+  const re = /```([A-Za-z0-9_+#.\-]*)\n?([\s\S]*?)```/g;
+  const out: string[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(md))) {
+    out.push(md.slice(last, m.index));
+    last = m.index + m[0].length;
+    const lang = m[1] || "";
+    const code = m[2].replace(/\n$/, "");
+    const lines = code.split("\n").length;
+    if (code.length <= maxChars && lines <= maxLines) {
+      out.push(m[0]); // short block — keep inline
+      continue;
+    }
+    const filename = suggestFilename(lang, code, files.length);
+    files.push({ filename, lang, content: code, lines, bytes: Buffer.byteLength(code, "utf8") });
+    const snippet = code.split("\n").slice(0, SNIPPET_LINES).join("\n");
+    out.push(
+      `📎 **${filename}** — ${lines} lines · ${kb(files[files.length - 1].bytes)} (attached as file)\n\`\`\`${lang}\n${snippet}\n…\n\`\`\``
+    );
+  }
+  out.push(md.slice(last));
+  return { md: out.join(""), files };
+}
+
 /** Raw-markdown preview used while streaming (plain text mode — never a parse error). */
 export function plainPreview(md: string, max = 3600): string {
   const t = md.trim();

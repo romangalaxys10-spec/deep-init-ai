@@ -14,10 +14,12 @@ import {
 import { runAgentChainStreaming } from "./brain";
 import type { GatewayChat } from "./types";
 import {
+  extractFileAttachments,
   htmlToPlain,
   markdownToTelegramHTML,
   plainPreview,
   splitTelegramHtml,
+  type CodeFile,
 } from "./telegram-format";
 
 /* ============================================================
@@ -109,6 +111,55 @@ export async function tgSendMessage(token: string, chatId: number, text: string)
   }
 }
 
+/**
+ * Send a real file document (long code blocks are delivered as files,
+ * never as chat walls). Multipart upload, UTF-8 text payload.
+ */
+export async function tgSendDocument(
+  token: string,
+  chatId: number,
+  file: CodeFile
+): Promise<boolean> {
+  try {
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append(
+      "document",
+      new Blob([file.content], { type: "text/plain; charset=utf-8" }),
+      file.filename
+    );
+    form.append("caption", `${file.filename} · ${file.lines} lines`);
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), TG_TIMEOUT_MS);
+    let ok = false;
+    try {
+      const res = await fetch(tgUrl(token, "sendDocument"), {
+        method: "POST",
+        body: form,
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      ok = (await res.json() as { ok?: boolean }).ok === true;
+    } finally {
+      clearTimeout(t);
+    }
+    if (!ok) {
+      // fallback: never lose the code — paste as chat text (chunked)
+      await tgSendMessage(token, chatId, `📎 ${file.filename}:
+${file.content}`);
+    }
+    return ok;
+  } catch {
+    try {
+      await tgSendMessage(token, chatId, `📎 ${file.filename}:
+${file.content}`);
+    } catch {
+      /* channel down */
+    }
+    return false;
+  }
+}
+
 const EDIT_MIN_INTERVAL_MS = 1_600; // Telegram rate-friendliness
 const EDIT_MIN_NEW_CHARS = 48;
 
@@ -116,6 +167,8 @@ const EDIT_MIN_NEW_CHARS = 48;
  * Send (or edit-in-place) a markdown-ish reply as Telegram HTML with
  * code-block rendering, fence-aware chunking and a plain-text fallback
  * when Telegram rejects the entities — formatting is never silently lost.
+ * Long code walls never hit the chat: they are extracted and delivered
+ * as real file documents right after the text.
  */
 export async function sendFormatted(
   token: string,
@@ -123,7 +176,8 @@ export async function sendFormatted(
   md: string,
   editMessageId?: number
 ) {
-  const html = markdownToTelegramHTML(md);
+  const { md: stripped, files } = extractFileAttachments(md);
+  const html = markdownToTelegramHTML(stripped);
   const chunks = splitTelegramHtml(html);
   for (let i = 0; i < chunks.length; i++) {
     const useEdit = Boolean(editMessageId) && i === 0;
@@ -141,6 +195,9 @@ export async function sendFormatted(
       const plain = htmlToPlain(chunks[i]).slice(0, 3900);
       await tgCall(token, method, { ...base, text: plain, disable_web_page_preview: true });
     }
+  }
+  for (const file of files) {
+    await tgSendDocument(token, chatId, file);
   }
 }
 

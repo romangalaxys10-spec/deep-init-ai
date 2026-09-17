@@ -84,8 +84,12 @@ https://www.rommark.dev
   check("web_search no raw syntax", !searchRes.includes("<function"));
 
   const fetchRes = await executeToolCall({ name: "web_fetch", params: { url: "https://example.com" } });
-  check("web_fetch executed", fetchRes.startsWith("web_fetch("), fetchRes.slice(0, 120));
-  check("web_fetch got content", /Example Domain/.test(fetchRes), fetchRes.slice(0, 120));
+  check("web_fetch executed", fetchRes.startsWith("web_fetch(https://example.com)"), fetchRes.slice(0, 120));
+  check(
+    "web_fetch well-formed (content or reader title, no error)",
+    /^web_fetch\(https:\/\/example\.com\)( — [^\n]+)?:\n\S/.test(fetchRes) && !/error/i.test(fetchRes.slice(0, 60)),
+    fetchRes.slice(0, 120)
+  );
 
   const unknown = await executeToolCall({ name: "do_magic", params: {} });
   check("unknown tool refused safely", unknown.includes("not available"));

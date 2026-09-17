@@ -1,7 +1,8 @@
 "use client";
 
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Download } from "lucide-react";
 import { useState } from "react";
+import { suggestFilename } from "@/lib/telegram-format";
 
 /* ============================================================
  * RichText — chat message renderer with real code-block styling.
@@ -41,8 +42,9 @@ function parseBlocks(content: string): Block[] {
   return blocks;
 }
 
-function CodeBlock({ lang, code }: { lang: string; code: string }) {
+function CodeBlock({ lang, code, filename }: { lang: string; code: string; filename: string }) {
   const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(code);
@@ -52,22 +54,50 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
       /* clipboard unavailable */
     }
   };
+  const download = () => {
+    try {
+      const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    } catch {
+      /* download unavailable */
+    }
+  };
+  const lines = code.split("\n").length;
   return (
     <div className="my-2.5 overflow-hidden rounded-xl border border-stone-800/40 bg-stone-900 shadow-sm">
       <div className="flex items-center justify-between border-b border-white/10 px-3.5 py-1.5">
         <span className="font-mono text-[10px] uppercase tracking-widest text-stone-400">
           {lang || "code"}
+          {lines > 20 ? <span className="ml-2 text-stone-500">· {lines} lines</span> : null}
         </span>
-        <button
-          onClick={copy}
-          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] text-stone-400 transition-colors hover:bg-white/10 hover:text-stone-100"
-          aria-label="Copy code"
-        >
-          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-          {copied ? "copied" : "copy"}
-        </button>
+        <span className="flex items-center gap-1">
+          <button
+            onClick={download}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] text-stone-400 transition-colors hover:bg-white/10 hover:text-stone-100"
+            aria-label="Download code as file"
+            title={`Download ${filename}`}
+          >
+            <Download className="h-3 w-3" />
+            {saved ? "saved" : filename}
+          </button>
+          <button
+            onClick={copy}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] text-stone-400 transition-colors hover:bg-white/10 hover:text-stone-100"
+            aria-label="Copy code"
+          >
+            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            {copied ? "copied" : "copy"}
+          </button>
+        </span>
       </div>
-      <pre className="di-scroll overflow-x-auto px-3.5 py-3 font-mono text-[12.5px] leading-relaxed text-stone-100">
+      <pre className="di-scroll max-h-[420px] overflow-auto px-3.5 py-3 font-mono text-[12.5px] leading-relaxed text-stone-100">
         <code>{code}</code>
       </pre>
     </div>
@@ -123,7 +153,12 @@ export function RichText({ content, className }: { content: string; className?: 
     <div className={className}>
       {blocks.map((b, i) =>
         b.kind === "code" ? (
-          <CodeBlock key={i} lang={b.lang} code={b.code.replace(/\n$/, "")} />
+          <CodeBlock
+            key={i}
+            lang={b.lang}
+            code={b.code.replace(/\n$/, "")}
+            filename={suggestFilename(b.lang, b.code.replace(/\n$/, ""), i)}
+          />
         ) : (
           <p key={i} className="whitespace-pre-wrap">
             <InlineText text={b.text} />
