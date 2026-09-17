@@ -41,7 +41,21 @@ export default function Home() {
   }
 
   if (view === "wizard") {
-    return <Wizard onInitialize={() => setView("booting")} />;
+    return (
+      <Wizard
+        onInitialize={() => {
+          // completing the wizard on this device IS the first authentication —
+          // the operator goes straight into the console after the boot log.
+          try {
+            sessionStorage.setItem(AUTH_SESSION_KEY, "1");
+          } catch {
+            /* private mode */
+          }
+          setAuthed(true);
+          setView("booting");
+        }}
+      />
+    );
   }
 
   if (view === "booting") {

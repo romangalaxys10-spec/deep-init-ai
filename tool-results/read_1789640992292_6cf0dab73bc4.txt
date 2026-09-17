@@ -1,0 +1,662 @@
+     1→"use client";
+     2→
+     3→import { Button } from "@/components/ui/button";
+     4→import { Input } from "@/components/ui/input";
+     5→import { Label } from "@/components/ui/label";
+     6→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+     7→import { Switch } from "@/components/ui/switch";
+     8→import { useToast } from "@/hooks/use-toast";
+     9→import { buildSystemPrompt, uid, useDeepInit } from "@/lib/store";
+    10→import type { AIProvider, ProviderCompat } from "@/lib/types";
+    11→import {
+    12→  ArrowDown,
+    13→  ArrowUp,
+    14→  Bot,
+    15→  CheckCircle2,
+    16→  KeyRound,
+    17→  Loader2,
+    18→  Plus,
+    19→  RefreshCcw,
+    20→  Send,
+    21→  Trash2,
+    22→  Zap,
+    23→} from "lucide-react";
+    24→import { useMemo, useState } from "react";
+    25→import { CopyField, MonoLabel, Panel, StatusDot } from "./ui-bits";
+    26→import { ChannelLine, ProviderLine, StepQuestionnaire, StepReview } from "./wizard-steps-b";
+    27→
+    28→const WIZARD_STEPS = ["Operator", "Telegram", "AI brains", "Directives", "Initialize"] as const;
+    29→
+    30→const PRESETS: { label: string; baseUrl: string; model: string; compat: ProviderCompat; keyHint?: string }[] = [
+    31→  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", compat: "openai" },
+    32→  { label: "Anthropic", baseUrl: "https://api.anthropic.com", model: "claude-sonnet-4-20250514", compat: "anthropic" },
+    33→  { label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "openrouter/auto", compat: "openai" },
+    34→  { label: "Groq", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", compat: "openai" },
+    35→  { label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", compat: "openai" },
+    36→  { label: "Mistral", baseUrl: "https://api.mistral.ai/v1", model: "mistral-large-latest", compat: "openai" },
+    37→  { label: "Google Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.0-flash", compat: "openai" },
+    38→  { label: "Ollama (local)", baseUrl: "http://localhost:11434/v1", model: "llama3.1", compat: "openai", keyHint: "no key needed" },
+    39→  { label: "Custom / self-hosted", baseUrl: "", model: "", compat: "openai" },
+    40→];
+    41→
+    42→const COMMON_TZ = [
+    43→  "UTC",
+    44→  "Europe/London",
+    45→  "Europe/Berlin",
+    46→  "Europe/Tbilisi",
+    47→  "Europe/Istanbul",
+    48→  "America/New_York",
+    49→  "America/Chicago",
+    50→  "America/Los_Angeles",
+    51→  "Asia/Dubai",
+    52→  "Asia/Shanghai",
+    53→  "Asia/Tokyo",
+    54→  "Asia/Singapore",
+    55→  "Australia/Sydney",
+    56→];
+    57→
+    58→export function Wizard({ onInitialize }: { onInitialize: () => void }) {
+    59→  const step = useDeepInit((s) => s.wizardStep);
+    60→  const setStep = useDeepInit((s) => s.setWizardStep);
+    61→
+    62→  return (
+    63→    <div className="di-grid-bg min-h-screen">
+    64→      <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
+    65→        {/* progress rail */}
+    66→        <div className="mb-8 flex flex-wrap items-center gap-2">
+    67→          {WIZARD_STEPS.map((s, i) => (
+    68→            <button
+    69→              key={s}
+    70→              onClick={() => i < step && setStep(i)}
+    71→              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-[11px] transition-colors ${
+    72→                i === step
+    73→                  ? "border-primary/70 bg-primary/15 text-foreground"
+    74→                  : i < step
+    75→                    ? "border-primary/30 bg-transparent text-primary hover:bg-primary/5"
+    76→                    : "border-border text-muted-foreground"
+    77→              }`}
+    78→            >
+    79→              <span className={i <= step ? "text-primary" : ""}>{String(i + 1).padStart(2, "0")}</span>
+    80→              <span className="hidden sm:inline">{s}</span>
+    81→            </button>
+    82→          ))}
+    83→        </div>
+    84→
+    85→        {step === 0 && <StepIdentity onNext={() => setStep(1)} />}
+    86→        {step === 1 && <StepChannels onNext={() => setStep(2)} onBack={() => setStep(0)} />}
+    87→        {step === 2 && <StepProviders onNext={() => setStep(3)} onBack={() => setStep(1)} />}
+    88→        {step === 3 && <StepQuestionnaire onNext={() => setStep(4)} onBack={() => setStep(2)} />}
+    89→        {step === 4 && <StepReview onBack={() => setStep(3)} onInitialize={onInitialize} />}
+    90→      </div>
+    91→    </div>
+    92→  );
+    93→}
+    94→
+    95→/* ---------------- Step 1: identity ---------------- */
+    96→
+    97→function StepIdentity({ onNext }: { onNext: () => void }) {
+    98→  const profile = useDeepInit((s) => s.profile);
+    99→  const setProfile = useDeepInit((s) => s.setProfile);
+   100→  const ensureCredentials = useDeepInit((s) => s.ensureCredentials);
+   101→
+   102→  const tzOptions = useMemo(() => {
+   103→    let list: string[] = COMMON_TZ;
+   104→    try {
+   105→      const intl = Intl.supportedValuesOf ? (Intl.supportedValuesOf("timeZone") as string[]) : [];
+   106→      if (intl.length) list = intl;
+   107→    } catch {
+   108→      /* keep fallback */
+   109→    }
+   110→    return list;
+   111→  }, []);
+   112→
+   113→  const valid = profile.displayName.trim().length > 0 && profile.agentName.trim().length > 0;
+   114→
+   115→  return (
+   116→    <div className="di-fade-up space-y-6">
+   117→      <div>
+   118→        <MonoLabel className="mb-2">{`/// step 1 of 5 — operator`}</MonoLabel>
+   119→        <h2 className="text-2xl font-bold tracking-tight">First, who is the boss?</h2>
+   120→        <p className="mt-1 text-sm text-muted-foreground">
+   121→          The agent greets you by name, works in your timezone and answers to the name you give it.
+   122→        </p>
+   123→      </div>
+   124→
+   125→      <Panel className="mx-auto max-w-xl p-6">
+   126→        <div className="space-y-5">
+   127→          <div className="space-y-2">
+   128→            <Label htmlFor="displayName">Your name</Label>
+   129→            <Input
+   130→              id="displayName"
+   131→              placeholder="e.g. Alex"
+   132→              value={profile.displayName}
+   133→              onChange={(e) => setProfile({ displayName: e.target.value })}
+   134→              autoFocus
+   135→            />
+   136→          </div>
+   137→          <div className="space-y-2">
+   138→            <Label htmlFor="agentName">Name your agent</Label>
+   139→            <Input
+   140→              id="agentName"
+   141→              placeholder="e.g. Init, Nova, Jarvis..."
+   142→              value={profile.agentName}
+   143→              onChange={(e) => setProfile({ agentName: e.target.value })}
+   144→            />
+   145→            <p className="font-mono text-[11px] text-muted-foreground">
+   146→              you&apos;ll be typing this name a lot on Telegram — choose something short
+   147→            </p>
+   148→          </div>
+   149→          <div className="space-y-2">
+   150→            <Label htmlFor="tz">Timezone</Label>
+   151→            <Select value={profile.timezone} onValueChange={(v) => setProfile({ timezone: v })}>
+   152→              <SelectTrigger id="tz">
+   153→                <SelectValue />
+   154→              </SelectTrigger>
+   155→              <SelectContent className="max-h-72">
+   156→                {tzOptions.map((t) => (
+   157→                  <SelectItem key={t} value={t} className="font-mono text-xs">
+   158→                    {t}
+   159→                  </SelectItem>
+   160→                ))}
+   161→              </SelectContent>
+   162→            </Select>
+   163→          </div>
+   164→          <p className="font-mono text-[11px] text-muted-foreground">
+   165→            next: the wizard generates your portal login + channel pairing token
+   166→          </p>
+   167→        </div>
+   168→      </Panel>
+   169→
+   170→      <div className="flex justify-end">
+   171→        <Button
+   172→          onClick={() => {
+   173→            ensureCredentials();
+   174→            onNext();
+   175→          }}
+   176→          disabled={!valid}
+   177→          className="font-mono"
+   178→        >
+   179→          Next: connect telegram →
+   180→        </Button>
+   181→      </div>
+   182→    </div>
+   183→  );
+   184→}
+   185→
+   186→/* ---------------- Step 2: telegram ---------------- */
+   187→
+   188→function StepChannels({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+   189→  const channels = useDeepInit((s) => s.channels);
+   190→  const profile = useDeepInit((s) => s.profile);
+   191→  const addChannel = useDeepInit((s) => s.addChannel);
+   192→  const { toast } = useToast();
+   193→
+   194→  const channel = channels.find((c) => c.type === "telegram");
+   195→
+   196→  return (
+   197→    <div className="di-fade-up space-y-6">
+   198→      <div>
+   199→        <MonoLabel className="mb-2">{`/// step 2 of 5 — telegram`}</MonoLabel>
+   200→        <h2 className="text-2xl font-bold tracking-tight">Wire up your 24/7 hotline</h2>
+   201→        <p className="mt-1 text-sm text-muted-foreground">
+   202→          Use our built-in bot or pair your own — then send your Channel Pairing Token to start chatting with the
+   203→          agent.
+   204→        </p>
+   205→      </div>
+   206→
+   207→      <TelegramCard
+   208→        channel={channel}
+   209→        onPair={(c) => {
+   210→          addChannel(c);
+   211→          toast({ title: "Telegram paired", description: `Bot ${c.handle} verified and attached to the agent.` });
+   212→        }}
+   213→      />
+   214→
+   215→      {/* channel pairing token */}
+   216→      <Panel className="p-5">
+   217→        <div className="flex items-center justify-between border-b border-border/70 pb-3">
+   218→          <div className="flex items-center gap-2">
+   219→            <KeyRound className="h-4 w-4 text-primary" />
+   220→            <MonoLabel>channel pairing token</MonoLabel>
+   221→          </div>
+   222→          <span className="font-mono text-[11px] text-muted-foreground">your master token</span>
+   223→        </div>
+   224→        <p className="mt-3 text-sm text-muted-foreground">
+   225→          Open the bot in Telegram and send it this token as your first message. That binds the chat to your agent —
+   226→          the bot will confirm with a <span className="font-mono text-foreground">Paired ✓</span> reply and start
+   227→          answering.
+   228→        </p>
+   229→        <CopyField className="mt-3" label="send this to the bot" value={profile.pairingToken || "—"} />
+   230→        <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+   231→          more tokens (for friends &amp; teammates, shared or isolated) can be minted in the console → channels tab
+   232→        </p>
+   233→      </Panel>
+   234→
+   235→      <div className="flex justify-between">
+   236→        <Button variant="outline" onClick={onBack} className="font-mono">← Back</Button>
+   237→        <Button onClick={onNext} className="font-mono">Next: connect AI brains →</Button>
+   238→      </div>
+   239→    </div>
+   240→  );
+   241→}
+   242→
+   243→/* ---------------- Telegram card (wizard + dashboard) ---------------- */
+   244→
+   245→type ChannelT = Parameters<typeof ChannelLine>[0]["c"];
+   246→
+   247→export function TelegramCard({
+   248→  channel,
+   249→  onPair,
+   250→}: {
+   251→  channel?: ChannelT;
+   252→  onPair: (c: ChannelT) => void;
+   253→}) {
+   254→  const [botMode, setBotMode] = useState<"builtin" | "own">(channel?.builtIn === false ? "own" : "builtin");
+   255→  const [token, setToken] = useState("");
+   256→  const [busy, setBusy] = useState(false);
+   257→  const [error, setError] = useState<string | null>(null);
+   258→  const [gateway, setGateway] = useState<{ mode?: string; warning?: string } | null>(null);
+   259→  const profile = useDeepInit((s) => s.profile);
+   260→
+   261→  const pair = async (mode: "builtin" | "own") => {
+   262→    setBusy(true);
+   263→    setError(null);
+   264→    try {
+   265→      const state = useDeepInit.getState();
+   266→      const systemPrompt = buildSystemPrompt(
+   267→        state.profile,
+   268→        state.questionnaire,
+   269→        state.channels,
+   270→        state.tools,
+   271→        state.instances,
+   272→        state.tunnels,
+   273→        state.skills
+   274→      );
+   275→      const res = await fetch("/api/pair/telegram", {
+   276→        method: "POST",
+   277→        headers: { "Content-Type": "application/json" },
+   278→        body: JSON.stringify({
+   279→          mode,
+   280→          token: mode === "own" ? token.trim() : undefined,
+   281→          config: {
+   282→            agentName: state.profile.agentName,
+   283→            ownerName: state.profile.displayName,
+   284→            ownerToken: state.profile.pairingToken,
+   285→            systemPrompt,
+   286→            providers: [...state.providers]
+   287→              .filter((p) => p.enabled && p.baseUrl && p.model)
+   288→              .sort((a, b) => a.priority - b.priority)
+   289→              .map((p) => ({
+   290→                id: p.id,
+   291→                label: p.label,
+   292→                baseUrl: p.baseUrl,
+   293→                apiKey: p.apiKey,
+   294→                model: p.model,
+   295→                compat: p.compat,
+   296→              })),
+   297→            allowDemoBrain: true,
+   298→            whitelist: state.whitelist.map((w) => ({ token: w.token, name: w.name, mode: w.mode })),
+   299→          },
+   300→        }),
+   301→      });
+   302→      const data = await res.json();
+   303→      if (data.ok) {
+   304→        setGateway({ mode: data.gatewayMode, warning: data.warning });
+   305→        onPair({
+   306→          id: channel?.id || uid(),
+   307→          type: "telegram",
+   308→          status: "connected",
+   309→          label: mode === "builtin" ? "Telegram — built-in bot" : "Telegram",
+   310→          handle: `@${data.bot.username}`,
+   311→          connectedAt: channel?.connectedAt || new Date().toISOString(),
+   312→          sessionKey: data.sessionKey,
+   313→          gatewayMode: data.gatewayMode,
+   314→          builtIn: mode === "builtin",
+   315→        });
+   316→      } else {
+   317→        setError(data.error || "Pairing failed");
+   318→      }
+   319→    } catch {
+   320→      setError("Network error while reaching the pairing service");
+   321→    } finally {
+   322→      setBusy(false);
+   323→    }
+   324→  };
+   325→
+   326→  /* ------- connected state ------- */
+   327→  if (channel?.status === "connected") {
+   328→    return (
+   329→      <Panel className="p-5">
+   330→        <div className="flex items-center justify-between border-b border-border/70 pb-3">
+   331→          <div className="flex items-center gap-2.5">
+   332→            <Send className="h-5 w-5 text-primary" />
+   333→            <span className="font-semibold">Telegram</span>
+   334→          </div>
+   335→          <div className="flex items-center gap-2">
+   336→            {channel.gatewayMode && (
+   337→              <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-mono text-[10px] text-primary">
+   338→                {channel.gatewayMode} gateway
+   339→              </span>
+   340→            )}
+   341→            <StatusDot ok />
+   342→          </div>
+   343→        </div>
+   344→        <div className="mt-4 space-y-3">
+   345→          <ChannelLine c={channel} />
+   346→          <CopyField label={`send this to ${channel.handle}`} value={profile.pairingToken || "—"} />
+   347→          <p className="text-xs text-muted-foreground">
+   348→            First time? Open <span className="font-mono text-foreground">{channel.handle}</span> in Telegram, send the
+   349→            token above, and the agent replies <span className="font-mono text-foreground">Paired ✓</span> — from then
+   350→            on it answers every message with its full brain chain.
+   351→          </p>
+   352→          {gateway?.warning && (
+   353→            <p className="font-mono text-[11px] text-amber-400/90">{gateway.warning}</p>
+   354→          )}
+   355→          <div className="flex items-center gap-2">
+   356→            <Button
+   357→              variant="outline"
+   358→              size="sm"
+   359→              className="font-mono text-xs"
+   360→              disabled={busy}
+   361→              onClick={() => pair(channel.builtIn === false ? "own" : "builtin")}
+   362→            >
+   363→              {busy ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <RefreshCcw className="mr-1.5 h-3 w-3" />}
+   364→              Resync gateway
+   365→            </Button>
+   366→            <span className="font-mono text-[11px] text-muted-foreground">
+   367→              pushes the latest brains + whitelist to the server
+   368→            </span>
+   369→          </div>
+   370→        </div>
+   371→      </Panel>
+   372→    );
+   373→  }
+   374→
+   375→  /* ------- pairing state ------- */
+   376→  return (
+   377→    <Panel className="p-5">
+   378→      <div className="flex items-center justify-between border-b border-border/70 pb-3">
+   379→        <div className="flex items-center gap-2.5">
+   380→          <Send className="h-5 w-5 text-primary" />
+   381→          <span className="font-semibold">Telegram</span>
+   382→        </div>
+   383→        <StatusDot ok={false} />
+   384→      </div>
+   385→
+   386→      <div className="mt-4 grid grid-cols-2 gap-2">
+   387→        <button
+   388→          type="button"
+   389→          onClick={() => setBotMode("builtin")}
+   390→          className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
+   391→            botMode === "builtin" ? "border-primary/60 bg-primary/10" : "border-border hover:border-primary/30"
+   392→          }`}
+   393→        >
+   394→          <div className="flex items-center gap-2 text-sm font-medium">
+   395→            <Bot className="h-4 w-4 text-primary" /> Built-in bot
+   396→          </div>
+   397→          <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">@init_smart_bot — zero setup</div>
+   398→        </button>
+   399→        <button
+   400→          type="button"
+   401→          onClick={() => setBotMode("own")}
+   402→          className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
+   403→            botMode === "own" ? "border-primary/60 bg-primary/10" : "border-border hover:border-primary/30"
+   404→          }`}
+   405→        >
+   406→          <div className="flex items-center gap-2 text-sm font-medium">
+   407→            <KeyRound className="h-4 w-4 text-primary" /> My own bot
+   408→          </div>
+   409→          <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">paste a @BotFather token</div>
+   410→        </button>
+   411→      </div>
+   412→
+   413→      <div className="mt-4 space-y-3">
+   414→        {botMode === "builtin" ? (
+   415→          <p className="text-sm text-muted-foreground">
+   416→            The Deep-init gateway already runs <span className="font-mono text-foreground">@init_smart_bot</span> on a
+   417→            public webhook. Connect it, then send your pairing token to the bot — done.
+   418→          </p>
+   419→        ) : (
+   420→          <>
+   421→            <p className="text-sm text-muted-foreground">
+   422→              Create a bot with <span className="font-mono text-foreground">@BotFather</span>, paste its token here —
+   423→              it&apos;s verified live against Telegram and wired to a webhook.
+   424→            </p>
+   425→            <Input
+   426→              placeholder="123456789:AAExample_Token_From_BotFather"
+   427→              value={token}
+   428→              onChange={(e) => setToken(e.target.value)}
+   429→              className="font-mono text-xs"
+   430→              type="password"
+   431→            />
+   432→          </>
+   433→        )}
+   434→        {error && <p className="text-xs text-red-400">{error}</p>}
+   435→        <Button
+   436→          onClick={() => pair(botMode)}
+   437→          disabled={busy || (botMode === "own" && token.trim().length < 10)}
+   438→          className="w-full font-mono"
+   439→        >
+   440→          {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
+   441→          {busy
+   442→            ? "Wiring the gateway..."
+   443→            : botMode === "builtin"
+   444→              ? "Connect built-in bot"
+   445→              : "Verify & pair bot"}
+   446→        </Button>
+   447→      </div>
+   448→    </Panel>
+   449→  );
+   450→}
+   451→
+   452→/* ---------------- Step 3: providers ---------------- */
+   453→
+   454→const EMPTY_NEW = { label: "", baseUrl: "", apiKey: "", model: "", compat: "openai" as ProviderCompat };
+   455→
+   456→function StepProviders({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+   457→  const providers = useDeepInit((s) => s.providers);
+   458→  const addProvider = useDeepInit((s) => s.addProvider);
+   459→  const updateProvider = useDeepInit((s) => s.updateProvider);
+   460→  const removeProvider = useDeepInit((s) => s.removeProvider);
+   461→  const moveProvider = useDeepInit((s) => s.moveProvider);
+   462→  const logActivity = useDeepInit((s) => s.logActivity);
+   463→  const { toast } = useToast();
+   464→
+   465→  const [form, setForm] = useState(EMPTY_NEW);
+   466→  const [presetIdx, setPresetIdx] = useState("0");
+   467→  const [testingId, setTestingId] = useState<string | null>(null);
+   468→
+   469→  const sorted = [...providers].sort((a, b) => a.priority - b.priority);
+   470→
+   471→  const applyPreset = (idx: string) => {
+   472→    setPresetIdx(idx);
+   473→    const p = PRESETS[Number(idx)];
+   474→    if (!p) return;
+   475→    if (p.label === "Custom / self-hosted") {
+   476→      setForm({ ...EMPTY_NEW, label: "", baseUrl: "", model: "", compat: "openai" });
+   477→    } else {
+   478→      setForm({ ...EMPTY_NEW, label: p.label, baseUrl: p.baseUrl, model: p.model, compat: p.compat });
+   479→    }
+   480→  };
+   481→
+   482→  const add = () => {
+   483→    if (!form.label.trim() || !form.baseUrl.trim() || !form.model.trim()) {
+   484→      toast({ title: "Missing fields", description: "Name, endpoint and model are required.", variant: "destructive" });
+   485→      return;
+   486→    }
+   487→    const nextPriority = providers.length ? Math.max(...providers.map((p) => p.priority)) + 1 : 1;
+   488→    const provider: AIProvider = {
+   489→      id: uid(),
+   490→      label: form.label.trim(),
+   491→      baseUrl: form.baseUrl.trim(),
+   492→      apiKey: form.apiKey.trim(),
+   493→      model: form.model.trim(),
+   494→      compat: form.compat,
+   495→      enabled: true,
+   496→      priority: nextPriority,
+   497→      lastStatus: "untested",
+   498→    };
+   499→    addProvider(provider);
+   500→    logActivity({ kind: "provider", title: `Provider added: ${provider.label}`, detail: `${provider.model} @ fallback #${nextPriority}` });
+   501→    setForm(EMPTY_NEW);
+   502→    setPresetIdx("0");
+   503→    toast({ title: "Provider added", description: `${provider.label} joins the fallback chain at #${nextPriority}.` });
+   504→  };
+   505→
+   506→  const test = async (p: AIProvider) => {
+   507→    setTestingId(p.id);
+   508→    try {
+   509→      const res = await fetch("/api/chat", {
+   510→        method: "POST",
+   511→        headers: { "Content-Type": "application/json" },
+   512→        body: JSON.stringify({
+   513→          messages: [{ role: "user", content: "Reply with exactly: INIT_OK" }],
+   514→          providers: [{ id: p.id, label: p.label, baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model, compat: p.compat }],
+   515→          allowDemoBrain: false,
+   516→        }),
+   517→      });
+   518→      const data = await res.json();
+   519→      if (res.ok && data.content) {
+   520→        updateProvider(p.id, { lastStatus: "ok", lastLatencyMs: data.latencyMs, lastError: undefined, lastCheckedAt: new Date().toISOString() });
+   521→        logActivity({ kind: "provider", title: `Health check OK: ${p.label}`, detail: `${data.latencyMs}ms` });
+   522→        toast({ title: `${p.label} is alive`, description: `Responded in ${data.latencyMs}ms` });
+   523→      } else {
+   524→        const err = data.fallbackChain?.[0]?.error || data.error || "Test failed";
+   525→        updateProvider(p.id, { lastStatus: "error", lastError: String(err).slice(0, 200), lastCheckedAt: new Date().toISOString() });
+   526→        logActivity({ kind: "error", title: `Health check failed: ${p.label}`, detail: String(err).slice(0, 120) });
+   527→        toast({ title: `${p.label} failed`, description: String(err).slice(0, 140), variant: "destructive" });
+   528→      }
+   529→    } catch (e) {
+   530→      const msg = e instanceof Error ? e.message : String(e);
+   531→      updateProvider(p.id, { lastStatus: "error", lastError: msg, lastCheckedAt: new Date().toISOString() });
+   532→      toast({ title: "Test error", description: msg, variant: "destructive" });
+   533→    } finally {
+   534→      setTestingId(null);
+   535→    }
+   536→  };
+   537→
+   538→  return (
+   539→    <div className="di-fade-up space-y-6">
+   540→      <div>
+   541→        <MonoLabel className="mb-2">{`/// step 3 of 5 — ai brains`}</MonoLabel>
+   542→        <h2 className="text-2xl font-bold tracking-tight">Connect AI providers with automatic fallback</h2>
+   543→        <p className="mt-1 text-sm text-muted-foreground">
+   544→          Any OpenAI-compatible or Anthropic endpoint works — cloud or self-hosted. The chain is tried top to bottom:
+   545→          if a brain fails, times out or rate-limits, the next one picks up the task mid-flight.
+   546→        </p>
+   547→      </div>
+   548→
+   549→      {/* chain list */}
+   550→      {sorted.length > 0 && (
+   551→        <Panel className="p-5">
+   552→          <div className="flex items-center justify-between">
+   553→            <MonoLabel>fallback chain — top is primary</MonoLabel>
+   554→            <span className="font-mono text-[11px] text-muted-foreground">{sorted.length} provider{sorted.length > 1 ? "s" : ""}</span>
+   555→          </div>
+   556→          <div className="mt-3 space-y-2">
+   557→            {sorted.map((p, i) => (
+   558→              <div key={p.id} className="flex items-center gap-2">
+   559→                <div className="flex flex-col gap-1">
+   560→                  <Button variant="ghost" size="icon" className="h-6 w-6" disabled={i === 0} onClick={() => moveProvider(p.id, -1)} aria-label="Move up">
+   561→                    <ArrowUp className="h-3.5 w-3.5" />
+   562→                  </Button>
+   563→                  <Button variant="ghost" size="icon" className="h-6 w-6" disabled={i === sorted.length - 1} onClick={() => moveProvider(p.id, 1)} aria-label="Move down">
+   564→                    <ArrowDown className="h-3.5 w-3.5" />
+   565→                  </Button>
+   566→                </div>
+   567→                <div className="min-w-0 flex-1">
+   568→                  <ProviderLine p={p} index={i} last={i === sorted.length - 1} />
+   569→                </div>
+   570→                <div className="flex shrink-0 flex-col gap-1">
+   571→                  <Switch
+   572→                    checked={p.enabled}
+   573→                    onCheckedChange={(v) => updateProvider(p.id, { enabled: v })}
+   574→                    aria-label="Enable provider"
+   575→                  />
+   576→                </div>
+   577→                <div className="flex shrink-0 gap-1">
+   578→                  <Button variant="outline" size="sm" className="h-8 font-mono text-[11px]" onClick={() => test(p)} disabled={testingId === p.id}>
+   579→                    {testingId === p.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCcw className="mr-1 h-3 w-3" />}
+   580→                    Test
+   581→                  </Button>
+   582→                  <Button variant="ghost" size="icon" className="h-8 w-8 text-red-400 hover:text-red-300" onClick={() => removeProvider(p.id)} aria-label="Remove provider">
+   583→                    <Trash2 className="h-3.5 w-3.5" />
+   584→                  </Button>
+   585→                </div>
+   586→              </div>
+   587→            ))}
+   588→          </div>
+   589→          {sorted.some((p) => p.lastError) && (
+   590→            <p className="mt-3 font-mono text-[11px] text-red-400/80">
+   591→              last error: {sorted.find((p) => p.lastError)?.lastError}
+   592→            </p>
+   593→          )}
+   594→        </Panel>
+   595→      )}
+   596→
+   597→      {/* add form */}
+   598→      <Panel className="p-5">
+   599→        <div className="flex items-center justify-between">
+   600→          <MonoLabel>add a provider</MonoLabel>
+   601→          <span className="font-mono text-[11px] text-muted-foreground">keys are stored only in this browser</span>
+   602→        </div>
+   603→        <div className="mt-4 grid gap-4">
+   604→          <div className="grid gap-4 sm:grid-cols-2">
+   605→            <div className="space-y-2">
+   606→              <Label>Preset</Label>
+   607→              <Select value={presetIdx} onValueChange={applyPreset}>
+   608→                <SelectTrigger><SelectValue /></SelectTrigger>
+   609→                <SelectContent>
+   610→                  {PRESETS.map((p, i) => (
+   611→                    <SelectItem key={p.label} value={String(i)}>{p.label}</SelectItem>
+   612→                  ))}
+   613→                </SelectContent>
+   614→              </Select>
+   615→            </div>
+   616→            <div className="space-y-2">
+   617→              <Label>Name</Label>
+   618→              <Input placeholder="e.g. My OpenAI" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
+   619→            </div>
+   620→          </div>
+   621→          <div className="grid gap-4 sm:grid-cols-2">
+   622→            <div className="space-y-2">
+   623→              <Label>API base URL</Label>
+   624→              <Input placeholder="https://api.openai.com/v1" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} className="font-mono text-xs" />
+   625→            </div>
+   626→            <div className="space-y-2">
+   627→              <Label>Model</Label>
+   628→              <Input placeholder="gpt-4o-mini" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className="font-mono text-xs" />
+   629→            </div>
+   630→          </div>
+   631→          <div className="grid gap-4 sm:grid-cols-2">
+   632→            <div className="space-y-2">
+   633→              <Label>API key <span className="text-muted-foreground">(optional for local)</span></Label>
+   634→              <Input type="password" placeholder="sk-..." value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} className="font-mono text-xs" />
+   635→            </div>
+   636→            <div className="space-y-2">
+   637→              <Label>API shape</Label>
+   638→              <Select value={form.compat} onValueChange={(v) => setForm({ ...form, compat: v as ProviderCompat })}>
+   639→                <SelectTrigger><SelectValue /></SelectTrigger>
+   640→                <SelectContent>
+   641→                  <SelectItem value="openai">OpenAI-compatible (/chat/completions)</SelectItem>
+   642→                  <SelectItem value="anthropic">Anthropic native (/v1/messages)</SelectItem>
+   643→                </SelectContent>
+   644→              </Select>
+   645→            </div>
+   646→          </div>
+   647→          <Button onClick={add} className="font-mono">
+   648→            <Plus className="mr-2 h-4 w-4" /> Add to fallback chain
+   649→          </Button>
+   650→        </div>
+   651→      </Panel>
+   652→
+   653→      <div className="flex justify-between">
+   654→        <Button variant="outline" onClick={onBack} className="font-mono">← Back</Button>
+   655→        <Button onClick={onNext} className="font-mono">
+   656→          {sorted.length ? "Next: shape its behavior →" : "Skip — use demo brain →"}
+   657→        </Button>
+   658→      </div>
+   659→    </div>
+   660→  );
+   661→}
+   662→
