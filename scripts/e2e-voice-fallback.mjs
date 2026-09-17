@@ -106,10 +106,18 @@ async function main() {
   while (Date.now() < deadline && sttRequests === 0) await page.waitForTimeout(500);
   ok("POST /api/voice/stt fired", sttRequests >= 1, `requests=${sttRequests}`);
 
-  /* after a tone-transcript the loop must RE-OPEN the mic, not die */
-  await page.waitForTimeout(3000);
+  /* after a tone-transcript the loop must RE-OPEN the mic, not die.
+   * The STT round-trip on a cold lambda takes seconds — poll, don't sleep. */
+  const resumed = await page
+    .waitForFunction(
+      () => /listening…/i.test(document.body.innerText) && !/thinking…/i.test(document.body.innerText),
+      null,
+      { timeout: 25000 }
+    )
+    .then(() => true)
+    .catch(() => false);
+  ok("loop resumed listening after empty transcript", resumed);
   const barAfter = await page.evaluate(() => document.body.innerText);
-  ok("loop resumed listening after empty transcript", /listening…/i.test(barAfter));
   ok("no error crash in UI", !/unsupportedTitle/i.test(barAfter));
 
   /* toggle off cleanly */
