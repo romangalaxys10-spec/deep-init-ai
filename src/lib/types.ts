@@ -20,17 +20,23 @@ export interface AIProvider {
   lastCheckedAt?: string;
 }
 
-export type ChannelType = "whatsapp" | "telegram";
+export type ChannelType = "telegram";
 
 export interface MessagingChannel {
   id: string;
   type: ChannelType;
   status: "pending" | "connected" | "error";
   label: string;
-  /** telegram: bot username; whatsapp: phone mask */
+  /** telegram bot username, e.g. init_smart_bot */
   handle?: string;
   pairingCode?: string;
   connectedAt?: string;
+  /** server-side gateway session key, e.g. "builtin:DIP-..." or "own:<token>" */
+  sessionKey?: string;
+  /** how updates reach the agent */
+  gatewayMode?: "webhook" | "poll";
+  /** true when paired against the built-in @init_smart_bot */
+  builtIn?: boolean;
 }
 
 export type ToolKind = "mcp" | "api" | "plugin" | "builtin";
@@ -61,6 +67,22 @@ export interface UserProfile {
   displayName: string;
   agentName: string;
   timezone: string;
+  /** web portal login — auto-generated in the wizard */
+  portalUser?: string;
+  portalToken?: string;
+  /** the owner's Channel Pairing Token (sent to the bot to start chatting) */
+  pairingToken?: string;
+}
+
+/* ---------- Channel access whitelist ---------- */
+
+export interface WhitelistUser {
+  id: string;
+  name: string;
+  /** shared = shares the agent's memory/context; isolated = private thread per user */
+  mode: "shared" | "isolated";
+  token: string;
+  createdAt: string;
 }
 
 export interface ActivityEvent {
@@ -147,6 +169,22 @@ export interface FallbackStep {
 }
 
 /* ---------- API payloads ---------- */
+
+export interface GatewayChat {
+  chatId: number;
+  userName: string;
+  mode: "owner" | "shared" | "isolated";
+  boundAt: number;
+  lastAt: number;
+}
+
+export interface GatewayStatus {
+  registered: boolean;
+  botUsername?: string;
+  chats: GatewayChat[];
+  recentReplies: { at: number; chatId: number; preview: string }[];
+  boundTokens: string[];
+}
 
 export interface ChatRequest {
   messages: { role: "system" | "user" | "assistant"; content: string }[];

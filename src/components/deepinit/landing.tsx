@@ -21,7 +21,7 @@ const BOOT_LINES = [
   "deep-init v1.0.0 — agent kernel loading...",
   "mounting capability modules: web, fs, code, mail, vision",
   "scanning MCP registry .............. 42 servers found",
-  "linking messengers: whatsapp ✔ telegram ✔",
+  "linking messengers: telegram ✔ own-bot support ✔",
   "provider fallback chain: primary → backup → demo brain",
   "self-learning loop: ON  ·  heartbeat every 60s",
   "agent ONLINE — awaiting initialization",
@@ -55,8 +55,8 @@ const CAPABILITIES = [
   },
   {
     icon: MessageCircle,
-    title: "Lives in WhatsApp & Telegram",
-    body: "Pair your messenger once and command your agent from anywhere. It reports back proactively, day and night.",
+    title: "Lives in your Telegram",
+    body: "Pair the built-in bot or your own and command your agent from anywhere. It reports back proactively, day and night.",
   },
 ];
 
@@ -64,8 +64,8 @@ const STEPS = [
   {
     n: "01",
     icon: MessageCircle,
-    title: "Pair your messengers",
-    body: "WhatsApp via a one-time pairing code, Telegram via your @BotFather token — verified live.",
+    title: "Pair your Telegram",
+    body: "Your own @BotFather bot or our built-in @init_smart_bot — send a pairing token and you're live.",
   },
   {
     n: "02",
@@ -120,7 +120,7 @@ export function Landing({ onInitialize }: { onInitialize: () => void }) {
             <p className="mt-6 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
               Deep-init AI is a 24/7 personal assistant that can do anything a human can do
               on a computer — find, create, fetch, wire up any MCP / API / endpoint / plugin,
-              learn new skills and even create its own. You talk to it on WhatsApp or Telegram.
+              learn new skills and even create its own. You talk to it on Telegram.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <Button onClick={onInitialize} size="lg" className="font-mono">

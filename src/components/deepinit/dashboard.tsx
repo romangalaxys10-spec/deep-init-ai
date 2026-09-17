@@ -19,6 +19,8 @@ import {
   Cable,
   Clock,
   HeartPulse,
+  KeyRound,
+  LogOut,
   MessageCircle,
   MessagesSquare,
   MonitorSmartphone,
@@ -27,11 +29,12 @@ import {
   Wrench,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Logo, MonoLabel, Panel, StatusDot } from "./ui-bits";
+import { CopyField, Logo, MonoLabel, Panel, StatusDot } from "./ui-bits";
 import { AgentConsole } from "./agent-console";
 import { BrainsPanel, ToolsPanel } from "./dashboard-panels";
 import { InstancesPanel } from "./instances-panel";
-import { TelegramCard, WhatsAppCard } from "./wizard";
+import { GatewayPanel, WhitelistPanel } from "./channels-ops";
+import { TelegramCard } from "./wizard";
 
 type Tab = "overview" | "console" | "channels" | "brains" | "tools" | "instances" | "activity";
 
@@ -75,7 +78,7 @@ function timeAgo(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export function Dashboard() {
+export function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const profile = useDeepInit((s) => s.profile);
   const channels = useDeepInit((s) => s.channels);
   const providers = useDeepInit((s) => s.providers);
@@ -88,8 +91,6 @@ export function Dashboard() {
   const skills = useDeepInit((s) => s.skills);
   const activatedAt = useDeepInit((s) => s.activatedAt);
   const logActivity = useDeepInit((s) => s.logActivity);
-  const addChannel = useDeepInit((s) => s.addChannel);
-  const removeChannel = useDeepInit((s) => s.removeChannel);
   const resetAll = useDeepInit((s) => s.resetAll);
   const setView = useDeepInit((s) => s.setView);
 
@@ -147,6 +148,15 @@ export function Dashboard() {
             <span className="hidden items-center gap-2 font-mono text-[11px] text-muted-foreground md:inline-flex">
               <StatusDot ok /> active · up <span className="text-foreground">{uptime}</span>
             </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="font-mono text-xs"
+              onClick={onLogout}
+              aria-label="Log out of the portal"
+            >
+              <LogOut className="mr-1.5 h-3.5 w-3.5" /> Lock
+            </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="outline" size="sm" className="font-mono text-xs">
@@ -199,7 +209,7 @@ export function Dashboard() {
             {/* stat cards */}
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
               <StatCard icon={<Clock className="h-4 w-4 text-primary" />} label="uptime" value={uptime} sub={activatedAt ? `since ${new Date(activatedAt).toLocaleString()}` : undefined} />
-              <StatCard icon={<MessageCircle className="h-4 w-4 text-primary" />} label="channels" value={`${connected.length}/2`} sub={connected.length ? connected.map((c) => c.handle || c.type).join(" · ") : "none paired"} />
+              <StatCard icon={<MessageCircle className="h-4 w-4 text-primary" />} label="channels" value={`${connected.length}/1`} sub={connected.length ? connected.map((c) => c.handle || c.type).join(" · ") : "telegram not paired"} />
               <StatCard icon={<Cable className="h-4 w-4 text-primary" />} label="fallback chain" value={`${enabledProviders.length} brain${enabledProviders.length === 1 ? "" : "s"}`} sub={enabledProviders.length ? `primary: ${enabledProviders[0].label}` : "demo brain"} />
               <StatCard icon={<Wrench className="h-4 w-4 text-primary" />} label="tools armed" value={`${enabledTools.length}/${tools.length}`} sub={`${cycles} loop cycles`} />
               <StatCard icon={<MonitorSmartphone className="h-4 w-4 text-primary" />} label="machines linked" value={`${machinesLinked}`} sub={machinesLinked ? "ssh + tunnel" : "pair from instances tab"} />
@@ -245,7 +255,23 @@ export function Dashboard() {
                     ))}
                   </div>
                 </Panel>
-              <Panel className="p-5">
+
+                <Panel className="p-5">
+                  <div className="flex items-center gap-2">
+                    <KeyRound className="h-4 w-4 text-primary" />
+                    <MonoLabel>portal access</MonoLabel>
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <CopyField label="portal username" value={profile.portalUser || "—"} />
+                    <CopyField label="portal token" value={profile.portalToken || "—"} />
+                    <CopyField label="channel pairing token" value={profile.pairingToken || "—"} />
+                  </div>
+                  <p className="mt-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                    username + token unlock this console on any device · the pairing token goes to the telegram bot
+                  </p>
+                </Panel>
+
+                <Panel className="p-5">
                 <MonoLabel>skill registry</MonoLabel>
                 <div className="di-scroll mt-2 max-h-44 space-y-2 overflow-y-auto">
                   {skills.map((sk) => (
@@ -275,53 +301,7 @@ export function Dashboard() {
         {tab === "console" && <AgentConsole />}
 
         {tab === "channels" && (
-          <div className="di-fade-up space-y-4">
-            <div className="grid gap-4 lg:grid-cols-2">
-              <WhatsAppCard
-                channel={channels.find((c) => c.type === "whatsapp")}
-                onPair={(c) => addChannel(c)}
-              />
-              <TelegramCard
-                channel={channels.find((c) => c.type === "telegram")}
-                onPair={(c) => addChannel(c)}
-              />
-            </div>
-            {connected.length > 0 && (
-              <Panel className="p-5">
-                <div className="flex items-center justify-between">
-                  <MonoLabel>paired sessions</MonoLabel>
-                  <span className="font-mono text-[11px] text-muted-foreground">unlink revokes the gateway session</span>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {connected.map((c) => (
-                    <div key={c.id} className="flex items-center justify-between rounded-lg border border-border/70 bg-background/40 px-3 py-2.5">
-                      <div className="flex items-center gap-2.5">
-                        <StatusDot ok />
-                        <div>
-                          <div className="text-sm font-medium capitalize">{c.type}</div>
-                          <div className="font-mono text-[11px] text-muted-foreground">
-                            {c.handle || c.label}
-                            {c.connectedAt ? ` · linked ${timeAgo(c.connectedAt)}` : ""}
-                          </div>
-                        </div>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="font-mono text-xs text-red-400 hover:text-red-300"
-                        onClick={() => {
-                          removeChannel(c.id);
-                          logActivity({ kind: "channel", title: `Channel unlinked: ${c.type}` });
-                        }}
-                      >
-                        Unlink
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              </Panel>
-            )}
-          </div>
+          <ChannelsTab />
         )}
 
         {tab === "brains" && <div className="di-fade-up"><BrainsPanel /></div>}
@@ -376,6 +356,33 @@ function StatCard({ icon, label, value, sub }: { icon: React.ReactNode; label: s
       <div className="mt-2 font-mono text-xl font-bold tracking-tight text-foreground">{value}</div>
       {sub && <div className="mt-1 truncate text-[11px] text-muted-foreground">{sub}</div>}
     </Panel>
+  );
+}
+
+/* ---------------- channels tab ---------------- */
+
+function ChannelsTab() {
+  const channels = useDeepInit((s) => s.channels);
+  const addChannel = useDeepInit((s) => s.addChannel);
+  const logActivity = useDeepInit((s) => s.logActivity);
+  const telegram = channels.find((c) => c.type === "telegram");
+  const [boundTokens, setBoundTokens] = useState<string[]>([]);
+
+  return (
+    <div className="di-fade-up space-y-4">
+      <TelegramCard
+        channel={telegram}
+        onPair={(c) => {
+          addChannel(c);
+          logActivity({ kind: "channel", title: "Telegram paired", detail: `${c.handle} · ${c.gatewayMode || "gateway"} mode` });
+        }}
+      />
+      <GatewayPanel
+        sessionKey={telegram?.sessionKey}
+        onBoundTokens={setBoundTokens}
+      />
+      <WhitelistPanel boundTokens={boundTokens} />
+    </div>
   );
 }
 

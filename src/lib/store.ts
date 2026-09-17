@@ -15,7 +15,9 @@ import type {
   VoiceSettings,
   UserProfile,
   View,
+  WhitelistUser,
 } from "./types";
+import { genPairingToken, genPortalToken, slugifyUser } from "./tokens";
 
 export const BUILTIN_TOOLS: AgentTool[] = [
   { id: "bi-web", kind: "builtin", name: "Web Search & Fetch", enabled: true, status: "ok", detail: "Search, open and extract any page" },
@@ -85,6 +87,7 @@ interface DeepInitState {
   tunnels: TunnelMachine[];
   voice: VoiceSettings;
   skills: AgentSkill[];
+  whitelist: WhitelistUser[];
 
   setView: (v: View) => void;
   setWizardStep: (s: number) => void;
@@ -115,11 +118,18 @@ interface DeepInitState {
   setVoice: (v: Partial<VoiceSettings>) => void;
   addSkill: (s: AgentSkill) => void;
   updateSkill: (id: string, patch: Partial<AgentSkill>) => void;
+  addWhitelistUser: (w: WhitelistUser) => void;
+  removeWhitelistUser: (id: string) => void;
+  updateWhitelistUser: (id: string, patch: Partial<WhitelistUser>) => void;
+  /** generates portal credentials + owner pairing token (wizard step 1) */
+  ensureCredentials: () => void;
   resetAll: () => void;
   setHydrated: () => void;
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+
+export { uid, genPairingToken, genPortalToken, slugifyUser };
 
 const defaultQuestionnaire: Questionnaire = {
   goals: [],
@@ -158,6 +168,7 @@ export const useDeepInit = create<DeepInitState>()(
       tunnels: [],
       voice: defaultVoice,
       skills: BUILTIN_SKILLS,
+      whitelist: [],
 
       setHydrated: () => set({ hydrated: true }),
       setView: (view) => set({ view }),
@@ -229,6 +240,21 @@ export const useDeepInit = create<DeepInitState>()(
       updateSkill: (id, patch) =>
         set((s) => ({ skills: s.skills.map((sk) => (sk.id === id ? { ...sk, ...patch } : sk)) })),
 
+      addWhitelistUser: (w) => set((s) => ({ whitelist: [...s.whitelist, w] })),
+      removeWhitelistUser: (id) =>
+        set((s) => ({ whitelist: s.whitelist.filter((w) => w.id !== id) })),
+      updateWhitelistUser: (id, patch) =>
+        set((s) => ({ whitelist: s.whitelist.map((w) => (w.id === id ? { ...w, ...patch } : w)) })),
+
+      ensureCredentials: () =>
+        set((s) => {
+          const patch: Partial<UserProfile> = {};
+          if (!s.profile.portalUser) patch.portalUser = slugifyUser(s.profile.displayName || "operator");
+          if (!s.profile.portalToken) patch.portalToken = genPortalToken();
+          if (!s.profile.pairingToken) patch.pairingToken = genPairingToken();
+          return { profile: { ...s.profile, ...patch } };
+        }),
+
       resetAll: () =>
         set({
           view: "landing",
@@ -246,6 +272,7 @@ export const useDeepInit = create<DeepInitState>()(
           tunnels: [],
           voice: defaultVoice,
           skills: BUILTIN_SKILLS,
+          whitelist: [],
         }),
     }),
     {
@@ -267,6 +294,7 @@ export const useDeepInit = create<DeepInitState>()(
         tunnels: s.tunnels,
         voice: s.voice,
         skills: s.skills,
+        whitelist: s.whitelist,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();
@@ -275,7 +303,7 @@ export const useDeepInit = create<DeepInitState>()(
   )
 );
 
-export { uid };
+/* end of store */
 
 /* ---------- Agent system prompt builder ---------- */
 

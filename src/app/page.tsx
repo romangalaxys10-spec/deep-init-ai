@@ -1,11 +1,12 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useDeepInit } from "@/lib/store";
 import { Landing } from "@/components/deepinit/landing";
 import { Wizard } from "@/components/deepinit/wizard";
 import { BootSequence } from "@/components/deepinit/boot";
 import { Dashboard } from "@/components/deepinit/dashboard";
+import { AUTH_SESSION_KEY, PortalLogin } from "@/components/deepinit/portal-login";
 
 const emptySubscribe = () => () => {};
 
@@ -20,6 +21,11 @@ export default function Home() {
     emptySubscribe,
     () => true,
     () => false
+  );
+
+  // session-scoped portal authentication (set by the lock screen)
+  const [authed, setAuthed] = useState(() =>
+    typeof window === "undefined" ? false : sessionStorage.getItem(AUTH_SESSION_KEY) === "1"
   );
 
   // Prevent rendering persisted state before hydration to avoid mismatches.
@@ -43,7 +49,28 @@ export default function Home() {
   }
 
   if (view === "dashboard" && agentActive) {
-    return <Dashboard />;
+    if (!authed) {
+      return (
+        <PortalLogin
+          onSuccess={() => {
+            setAuthed(true);
+            setView("dashboard");
+          }}
+        />
+      );
+    }
+    return (
+      <Dashboard
+        onLogout={() => {
+          try {
+            sessionStorage.removeItem(AUTH_SESSION_KEY);
+          } catch {
+            /* ignore */
+          }
+          setAuthed(false);
+        }}
+      />
+    );
   }
 
   return <Landing onInitialize={() => setView("wizard")} />;

@@ -6,15 +6,15 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { uid, useDeepInit } from "@/lib/store";
+import { buildSystemPrompt, uid, useDeepInit } from "@/lib/store";
 import type { AIProvider, ProviderCompat } from "@/lib/types";
 import {
   ArrowDown,
   ArrowUp,
+  Bot,
   CheckCircle2,
+  KeyRound,
   Loader2,
-  MessageCircle,
-  Phone,
   Plus,
   RefreshCcw,
   Send,
@@ -22,10 +22,10 @@ import {
   Zap,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { MonoLabel, Panel, StatusDot } from "./ui-bits";
+import { CopyField, MonoLabel, Panel, StatusDot } from "./ui-bits";
 import { ChannelLine, ProviderLine, StepQuestionnaire, StepReview } from "./wizard-steps-b";
 
-const WIZARD_STEPS = ["Operator", "Messengers", "AI brains", "Directives", "Initialize"] as const;
+const WIZARD_STEPS = ["Operator", "Telegram", "AI brains", "Directives", "Initialize"] as const;
 
 const PRESETS: { label: string; baseUrl: string; model: string; compat: ProviderCompat; keyHint?: string }[] = [
   { label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", compat: "openai" },
@@ -97,6 +97,7 @@ export function Wizard({ onInitialize }: { onInitialize: () => void }) {
 function StepIdentity({ onNext }: { onNext: () => void }) {
   const profile = useDeepInit((s) => s.profile);
   const setProfile = useDeepInit((s) => s.setProfile);
+  const ensureCredentials = useDeepInit((s) => s.ensureCredentials);
 
   const tzOptions = useMemo(() => {
     let list: string[] = COMMON_TZ;
@@ -142,7 +143,7 @@ function StepIdentity({ onNext }: { onNext: () => void }) {
               onChange={(e) => setProfile({ agentName: e.target.value })}
             />
             <p className="font-mono text-[11px] text-muted-foreground">
-              you&apos;ll be typing this name a lot on WhatsApp — choose something short
+              you&apos;ll be typing this name a lot on Telegram — choose something short
             </p>
           </div>
           <div className="space-y-2">
@@ -160,55 +161,76 @@ function StepIdentity({ onNext }: { onNext: () => void }) {
               </SelectContent>
             </Select>
           </div>
+          <p className="font-mono text-[11px] text-muted-foreground">
+            next: the wizard generates your portal login + channel pairing token
+          </p>
         </div>
       </Panel>
 
       <div className="flex justify-end">
-        <Button onClick={onNext} disabled={!valid} className="font-mono">
-          Next: pair messengers →
+        <Button
+          onClick={() => {
+            ensureCredentials();
+            onNext();
+          }}
+          disabled={!valid}
+          className="font-mono"
+        >
+          Next: connect telegram →
         </Button>
       </div>
     </div>
   );
 }
 
-/* ---------------- Step 2: messengers ---------------- */
+/* ---------------- Step 2: telegram ---------------- */
 
 function StepChannels({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const channels = useDeepInit((s) => s.channels);
+  const profile = useDeepInit((s) => s.profile);
   const addChannel = useDeepInit((s) => s.addChannel);
   const { toast } = useToast();
+
+  const channel = channels.find((c) => c.type === "telegram");
 
   return (
     <div className="di-fade-up space-y-6">
       <div>
-        <MonoLabel className="mb-2">{`/// step 2 of 5 — messengers`}</MonoLabel>
-        <h2 className="text-2xl font-bold tracking-tight">Where do you want to reach your agent?</h2>
+        <MonoLabel className="mb-2">{`/// step 2 of 5 — telegram`}</MonoLabel>
+        <h2 className="text-2xl font-bold tracking-tight">Wire up your 24/7 hotline</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Pair WhatsApp or Telegram — or both. This is your 24/7 hotline to it, and its hotline to you.
+          Use our built-in bot or pair your own — then send your Channel Pairing Token to start chatting with the
+          agent.
         </p>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <WhatsAppCard
-          channel={channels.find((c) => c.type === "whatsapp")}
-          onPair={(c) => {
-            addChannel(c);
-            toast({ title: "WhatsApp paired", description: "Gateway session linked to this agent." });
-          }}
-        />
-        <TelegramCard
-          channel={channels.find((c) => c.type === "telegram")}
-          onPair={(c) => {
-            addChannel(c);
-            toast({ title: "Telegram paired", description: "Bot verified and attached to the agent." });
-          }}
-        />
-      </div>
+      <TelegramCard
+        channel={channel}
+        onPair={(c) => {
+          addChannel(c);
+          toast({ title: "Telegram paired", description: `Bot ${c.handle} verified and attached to the agent.` });
+        }}
+      />
 
-      <p className="text-center font-mono text-[11px] text-muted-foreground">
-        you can skip this and pair later from the console
-      </p>
+      {/* channel pairing token */}
+      <Panel className="p-5">
+        <div className="flex items-center justify-between border-b border-border/70 pb-3">
+          <div className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-primary" />
+            <MonoLabel>channel pairing token</MonoLabel>
+          </div>
+          <span className="font-mono text-[11px] text-muted-foreground">your master token</span>
+        </div>
+        <p className="mt-3 text-sm text-muted-foreground">
+          Open the bot in Telegram and send it this token as your first message. That binds the chat to your agent —
+          the bot will confirm with a <span className="font-mono text-foreground">Paired ✓</span> reply and start
+          answering.
+        </p>
+        <CopyField className="mt-3" label="send this to the bot" value={profile.pairingToken || "—"} />
+        <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+          more tokens (for friends &amp; teammates, shared or isolated) can be minted in the console → channels tab
+        </p>
+      </Panel>
 
       <div className="flex justify-between">
         <Button variant="outline" onClick={onBack} className="font-mono">← Back</Button>
@@ -218,159 +240,209 @@ function StepChannels({ onNext, onBack }: { onNext: () => void; onBack: () => vo
   );
 }
 
-export function WhatsAppCard({
+/* ---------------- Telegram card (wizard + dashboard) ---------------- */
+
+type ChannelT = Parameters<typeof ChannelLine>[0]["c"];
+
+export function TelegramCard({
   channel,
   onPair,
 }: {
-  channel?: { id: string; type: "whatsapp" | "telegram"; status: "pending" | "connected" | "error"; label: string; handle?: string; pairingCode?: string; connectedAt?: string };
-  onPair: (c: { id: string; type: "whatsapp" | "telegram"; status: "pending" | "connected" | "error"; label: string; handle?: string; pairingCode?: string; connectedAt?: string }) => void;
+  channel?: ChannelT;
+  onPair: (c: ChannelT) => void;
 }) {
-  const [loading, setLoading] = useState(false);
-  const [code, setCode] = useState<string | null>(channel?.pairingCode || null);
-  const [confirming, setConfirming] = useState(false);
-
-  const startPairing = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/pair/whatsapp", { method: "POST" });
-      const data = await res.json();
-      if (data.ok) {
-        setCode(data.code);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const confirm = () => {
-    setConfirming(true);
-    setTimeout(() => {
-      onPair({
-        id: uid(),
-        type: "whatsapp",
-        status: "connected",
-        label: "WhatsApp",
-        pairingCode: code || undefined,
-        handle: "+•• •• ••• ••" + (code ? code.slice(-2) : ""),
-        connectedAt: new Date().toISOString(),
-      });
-      setConfirming(false);
-    }, 1400);
-  };
-
-  if (channel?.status === "connected") {
-    return (
-      <Panel className="p-5">
-        <CardHeader icon={<MessageCircle className="h-5 w-5 text-primary" />} title="WhatsApp" />
-        <div className="mt-4 space-y-3">
-          <ChannelLine c={channel} />
-          <p className="font-mono text-[11px] text-muted-foreground">gateway session active · re-pair anytime</p>
-        </div>
-      </Panel>
-    );
-  }
-
-  return (
-    <Panel className="p-5">
-      <CardHeader icon={<MessageCircle className="h-5 w-5 text-primary" />} title="WhatsApp" />
-      {!code ? (
-        <div className="mt-4">
-          <p className="text-sm text-muted-foreground">
-            One-time pairing code — the Deep-init gateway binds your number to this agent. Your chats stay on your device.
-          </p>
-          <Button onClick={startPairing} disabled={loading} className="mt-4 w-full font-mono">
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Phone className="mr-2 h-4 w-4" />}
-            Generate pairing code
-          </Button>
-        </div>
-      ) : (
-        <div className="mt-4 space-y-3">
-          <div className="di-glow rounded-lg border border-primary/40 bg-primary/10 p-4 text-center">
-            <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-muted-foreground">pairing code</div>
-            <div className="di-text-glow mt-1 font-mono text-2xl font-bold tracking-widest text-primary">{code}</div>
-            <div className="mt-1 font-mono text-[10px] text-muted-foreground">expires in 3 min</div>
-          </div>
-          <ol className="space-y-1.5 text-xs text-muted-foreground">
-            <li>1. Open WhatsApp on your phone</li>
-            <li>2. Settings → Linked devices → Link a device</li>
-            <li>3. Choose &quot;Link with phone number instead&quot;</li>
-            <li>4. Enter the code above on the gateway</li>
-          </ol>
-          <Button onClick={confirm} disabled={confirming} className="w-full font-mono">
-            {confirming ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-            {confirming ? "Linking device..." : "I've entered the code"}
-          </Button>
-        </div>
-      )}
-    </Panel>
-  );
-}
-
-export function TelegramCard({ channel, onPair }: { channel?: Parameters<typeof ChannelLine>[0]["c"]; onPair: (c: Parameters<typeof ChannelLine>[0]["c"]) => void }) {
+  const [botMode, setBotMode] = useState<"builtin" | "own">(channel?.builtIn === false ? "own" : "builtin");
   const [token, setToken] = useState("");
-  const [checking, setChecking] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gateway, setGateway] = useState<{ mode?: string; warning?: string } | null>(null);
+  const profile = useDeepInit((s) => s.profile);
 
-  const verify = async () => {
-    setChecking(true);
+  const pair = async (mode: "builtin" | "own") => {
+    setBusy(true);
     setError(null);
     try {
+      const state = useDeepInit.getState();
+      const systemPrompt = buildSystemPrompt(
+        state.profile,
+        state.questionnaire,
+        state.channels,
+        state.tools,
+        state.instances,
+        state.tunnels,
+        state.skills
+      );
       const res = await fetch("/api/pair/telegram", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({
+          mode,
+          token: mode === "own" ? token.trim() : undefined,
+          config: {
+            agentName: state.profile.agentName,
+            ownerName: state.profile.displayName,
+            ownerToken: state.profile.pairingToken,
+            systemPrompt,
+            providers: [...state.providers]
+              .filter((p) => p.enabled && p.baseUrl && p.model)
+              .sort((a, b) => a.priority - b.priority)
+              .map((p) => ({
+                id: p.id,
+                label: p.label,
+                baseUrl: p.baseUrl,
+                apiKey: p.apiKey,
+                model: p.model,
+                compat: p.compat,
+              })),
+            allowDemoBrain: true,
+            whitelist: state.whitelist.map((w) => ({ token: w.token, name: w.name, mode: w.mode })),
+          },
+        }),
       });
       const data = await res.json();
       if (data.ok) {
+        setGateway({ mode: data.gatewayMode, warning: data.warning });
         onPair({
-          id: uid(),
+          id: channel?.id || uid(),
           type: "telegram",
           status: "connected",
-          label: "Telegram",
+          label: mode === "builtin" ? "Telegram — built-in bot" : "Telegram",
           handle: `@${data.bot.username}`,
-          connectedAt: new Date().toISOString(),
+          connectedAt: channel?.connectedAt || new Date().toISOString(),
+          sessionKey: data.sessionKey,
+          gatewayMode: data.gatewayMode,
+          builtIn: mode === "builtin",
         });
       } else {
-        setError(data.error || "Verification failed");
+        setError(data.error || "Pairing failed");
       }
     } catch {
-      setError("Network error while reaching the verification service");
+      setError("Network error while reaching the pairing service");
     } finally {
-      setChecking(false);
+      setBusy(false);
     }
   };
 
+  /* ------- connected state ------- */
   if (channel?.status === "connected") {
     return (
       <Panel className="p-5">
-        <CardHeader icon={<Send className="h-5 w-5 text-primary" />} title="Telegram" />
+        <div className="flex items-center justify-between border-b border-border/70 pb-3">
+          <div className="flex items-center gap-2.5">
+            <Send className="h-5 w-5 text-primary" />
+            <span className="font-semibold">Telegram</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {channel.gatewayMode && (
+              <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-mono text-[10px] text-primary">
+                {channel.gatewayMode} gateway
+              </span>
+            )}
+            <StatusDot ok />
+          </div>
+        </div>
         <div className="mt-4 space-y-3">
           <ChannelLine c={channel} />
-          <p className="font-mono text-[11px] text-muted-foreground">gateway polling updates for this bot</p>
+          <CopyField label={`send this to ${channel.handle}`} value={profile.pairingToken || "—"} />
+          <p className="text-xs text-muted-foreground">
+            First time? Open <span className="font-mono text-foreground">{channel.handle}</span> in Telegram, send the
+            token above, and the agent replies <span className="font-mono text-foreground">Paired ✓</span> — from then
+            on it answers every message with its full brain chain.
+          </p>
+          {gateway?.warning && (
+            <p className="font-mono text-[11px] text-amber-400/90">{gateway.warning}</p>
+          )}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="font-mono text-xs"
+              disabled={busy}
+              onClick={() => pair(channel.builtIn === false ? "own" : "builtin")}
+            >
+              {busy ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <RefreshCcw className="mr-1.5 h-3 w-3" />}
+              Resync gateway
+            </Button>
+            <span className="font-mono text-[11px] text-muted-foreground">
+              pushes the latest brains + whitelist to the server
+            </span>
+          </div>
         </div>
       </Panel>
     );
   }
 
+  /* ------- pairing state ------- */
   return (
     <Panel className="p-5">
-      <CardHeader icon={<Send className="h-5 w-5 text-primary" />} title="Telegram" />
+      <div className="flex items-center justify-between border-b border-border/70 pb-3">
+        <div className="flex items-center gap-2.5">
+          <Send className="h-5 w-5 text-primary" />
+          <span className="font-semibold">Telegram</span>
+        </div>
+        <StatusDot ok={false} />
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => setBotMode("builtin")}
+          className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
+            botMode === "builtin" ? "border-primary/60 bg-primary/10" : "border-border hover:border-primary/30"
+          }`}
+        >
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Bot className="h-4 w-4 text-primary" /> Built-in bot
+          </div>
+          <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">@init_smart_bot — zero setup</div>
+        </button>
+        <button
+          type="button"
+          onClick={() => setBotMode("own")}
+          className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
+            botMode === "own" ? "border-primary/60 bg-primary/10" : "border-border hover:border-primary/30"
+          }`}
+        >
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <KeyRound className="h-4 w-4 text-primary" /> My own bot
+          </div>
+          <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">paste a @BotFather token</div>
+        </button>
+      </div>
+
       <div className="mt-4 space-y-3">
-        <p className="text-sm text-muted-foreground">
-          Create a bot with <span className="font-mono text-foreground">@BotFather</span>, paste its token here — it&apos;s verified
-          live against Telegram.
-        </p>
-        <Input
-          placeholder="123456789:AAExample_Token_From_BotFather"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          className="font-mono text-xs"
-          type="password"
-        />
+        {botMode === "builtin" ? (
+          <p className="text-sm text-muted-foreground">
+            The Deep-init gateway already runs <span className="font-mono text-foreground">@init_smart_bot</span> on a
+            public webhook. Connect it, then send your pairing token to the bot — done.
+          </p>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Create a bot with <span className="font-mono text-foreground">@BotFather</span>, paste its token here —
+              it&apos;s verified live against Telegram and wired to a webhook.
+            </p>
+            <Input
+              placeholder="123456789:AAExample_Token_From_BotFather"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              className="font-mono text-xs"
+              type="password"
+            />
+          </>
+        )}
         {error && <p className="text-xs text-red-400">{error}</p>}
-        <Button onClick={verify} disabled={checking || token.trim().length < 10} className="w-full font-mono">
-          {checking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
-          {checking ? "Verifying with Telegram..." : "Verify & pair bot"}
+        <Button
+          onClick={() => pair(botMode)}
+          disabled={busy || (botMode === "own" && token.trim().length < 10)}
+          className="w-full font-mono"
+        >
+          {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
+          {busy
+            ? "Wiring the gateway..."
+            : botMode === "builtin"
+              ? "Connect built-in bot"
+              : "Verify & pair bot"}
         </Button>
       </div>
     </Panel>
@@ -587,17 +659,3 @@ function StepProviders({ onNext, onBack }: { onNext: () => void; onBack: () => v
     </div>
   );
 }
-
-function CardHeader({ icon, title }: { icon: React.ReactNode; title: string }) {
-  return (
-    <div className="flex items-center justify-between border-b border-border/70 pb-3">
-      <div className="flex items-center gap-2.5">
-        {icon}
-        <span className="font-semibold">{title}</span>
-      </div>
-      <StatusDot ok={false} />
-    </div>
-  );
-}
-
-export { WIZARD_STEPS };

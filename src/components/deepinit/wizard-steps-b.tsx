@@ -9,9 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { useDeepInit } from "@/lib/store";
 import type { AIProvider, MessagingChannel, Questionnaire } from "@/lib/types";
-import { Check, Clock, Cpu, Sparkles, User } from "lucide-react";
+import { Check, Clock, Cpu, KeyRound, Sparkles, User } from "lucide-react";
 import { useState } from "react";
-import { MonoLabel, Panel, StatusDot } from "./ui-bits";
+import { CopyField, MonoLabel, Panel, StatusDot } from "./ui-bits";
 
 export const GOALS = [
   "Research & briefings",
@@ -251,12 +251,29 @@ export function StepReview({ onBack, onInitialize }: { onBack: () => void; onIni
           <MonoLabel>messengers</MonoLabel>
           <div className="mt-3 space-y-2">
             {connected.length === 0 && (
-              <p className="text-sm text-muted-foreground">None paired yet — you can pair later in the console.</p>
+              <p className="text-sm text-muted-foreground">Not wired yet — you can pair Telegram later in the console.</p>
             )}
             {connected.map((c) => (
               <ChannelLine key={c.id} c={c} />
             ))}
           </div>
+        </Panel>
+
+        <Panel className="p-5 lg:col-span-2">
+          <div className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-primary" />
+            <MonoLabel>access credentials — generated for you, save them</MonoLabel>
+          </div>
+          <div className="mt-3 grid gap-3 lg:grid-cols-3">
+            <CopyField label="portal username" value={profile.portalUser || "—"} />
+            <CopyField label="portal token" value={profile.portalToken || "—"} />
+            <CopyField label="channel pairing token" value={profile.pairingToken || "—"} />
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            The username + token unlock this web portal on any device (you&apos;ll be asked for them next visit). The
+            pairing token goes to your Telegram bot — send it as a message to start chatting. Both were generated
+            during this wizard and live only in this browser until you save them.
+          </p>
         </Panel>
 
         <Panel className="p-5">

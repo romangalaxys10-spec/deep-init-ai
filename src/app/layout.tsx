@@ -16,14 +16,13 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Deep-init AI — Your 24/7 Autonomous Agent",
   description:
-    "Deep-init AI is a full-time personal agent that lives on your computer and your messengers. Pair WhatsApp or Telegram, connect any AI provider with automatic fallback, and let a self-directed agent work for you around the clock.",
+    "Deep-init AI is a full-time personal agent that lives on your computer and your Telegram. Pair the built-in bot or your own, connect any AI provider with automatic fallback, and let a self-directed agent work for you around the clock.",
   keywords: [
     "Deep-init",
     "AI agent",
     "autonomous agent",
     "personal assistant",
-    "WhatsApp",
-    "Telegram",
+    "Telegram bot",
     "MCP",
     "AI providers",
     "fallback",
@@ -32,7 +31,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Deep-init AI — Your 24/7 Autonomous Agent",
     description:
-      "Pair your messengers, connect any AI provider, answer a short wizard — your always-on agent takes over from there.",
+      "Pair your Telegram, connect any AI provider, answer a short wizard — your always-on agent takes over from there.",
     siteName: "Deep-init AI",
     type: "website",
   },

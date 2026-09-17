@@ -1,6 +1,8 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 
 export function Logo({ className }: { className?: string }) {
@@ -103,6 +105,52 @@ export function Panel({
       )}
     >
       {children}
+    </div>
+  );
+}
+
+/** Labeled mono value with a copy-to-clipboard button. */
+export function CopyField({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-background/40 px-3 py-2",
+        className
+      )}
+    >
+      <div className="min-w-0">
+        <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{label}</div>
+        <div className="truncate font-mono text-sm text-foreground" title={value}>
+          {value}
+        </div>
+      </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 shrink-0"
+        aria-label={`Copy ${label}`}
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(value);
+          } catch {
+            /* clipboard unavailable */
+          }
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }}
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
+      </Button>
     </div>
   );
 }
