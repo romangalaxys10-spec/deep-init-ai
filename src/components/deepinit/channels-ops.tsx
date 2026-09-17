@@ -237,6 +237,9 @@ export function GatewayPanel({
               })),
             allowDemoBrain: true,
             whitelist: state.whitelist.map((w) => ({ token: w.token, name: w.name, mode: w.mode })),
+            voiceId: state.voice.voice,
+            voiceRate: state.voice.rate,
+            voicePitch: state.voice.pitch,
           },
         }),
       });

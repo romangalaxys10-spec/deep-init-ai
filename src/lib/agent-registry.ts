@@ -39,6 +39,9 @@ export interface ChatState {
   thread: ChatMsg[];
   /** voice reply mode: auto (voice-in → voice-out, default) | on | off */
   voiceOut?: VoiceOutMode;
+  /** per-chat persona override — picked via the Telegram /voice picker;
+   *  undefined → follow the account-level agent voice */
+  voiceId?: string;
 }
 
 export interface RegisteredAgent {
@@ -69,6 +72,13 @@ export interface RegisteredAgent {
   presetId?: string;
   /** enabled cognition packs (Hermes / Moltis brains) */
   brains?: BrainConfig;
+  /** Voice Persona Passport — account-level voice persona synced from the
+   *  web console picker; every voice note the gateway speaks uses it. */
+  voiceId?: string;
+  /** speaking-rate tweak from the web picker, -50..50 (%) */
+  voiceRate?: number;
+  /** pitch tweak from the web picker, -50..50 (Hz) */
+  voicePitch?: number;
 }
 
 export interface Reminder {
@@ -332,6 +342,11 @@ export interface RegisterInput {
   providers: ChatRequest["providers"];
   allowDemoBrain: boolean;
   whitelist: { token: string; name: string; mode: "shared" | "isolated" }[];
+  /** Voice Persona Passport — provided at (re-)pairing from the portal picker;
+   *  when omitted the previously synced value is preserved. */
+  voiceId?: string;
+  voiceRate?: number;
+  voicePitch?: number;
 }
 
 export function registerAgent(input: RegisterInput): RegisteredAgent {
@@ -351,6 +366,9 @@ export function registerAgent(input: RegisterInput): RegisteredAgent {
     reminders: prev?.reminders ?? [],
     presetId: prev?.presetId,
     brains: prev?.brains,
+    voiceId: input.voiceId !== undefined ? input.voiceId : prev?.voiceId,
+    voiceRate: input.voiceRate !== undefined ? input.voiceRate : prev?.voiceRate,
+    voicePitch: input.voicePitch !== undefined ? input.voicePitch : prev?.voicePitch,
   };
   mem.set(input.key, agent);
   return agent;
@@ -493,6 +511,7 @@ export function bindChat(
     lastAt: Date.now(),
     thread: existing?.thread ?? [],
     voiceOut: existing?.voiceOut ?? "auto",
+    voiceId: existing?.voiceId,
   };
   agent.chats.set(chatId, state);
   agent.lastSeen = Date.now();

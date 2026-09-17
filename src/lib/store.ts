@@ -22,6 +22,7 @@ import type { AgentPreset } from "./presets";
 import { getPreset, presetPromptBlock } from "./presets";
 import { DEFAULT_BRAIN_CONFIG, normalizeBrainConfig, type BrainConfig, type BrainId } from "./brains";
 import { genPairingToken, genPortalToken, slugifyUser } from "./tokens";
+import { VOICE_PERSONAS } from "./voice-personas";
 
 export const BUILTIN_TOOLS: AgentTool[] = [
   { id: "bi-web", kind: "builtin", name: "Web Search & Fetch", enabled: true, status: "ok", detail: "Search, open and extract any page" },
@@ -65,14 +66,9 @@ export const BUILTIN_SKILLS: AgentSkill[] = [
   },
 ];
 
-export const VOICE_PRESETS: { name: string; voice: string; persona: string }[] = [
-  { name: "Nova — calm chief-of-staff", voice: "en-US-AvaNeural", persona: "warm, unhurried, executive" },
-  { name: "Atlas — technical operator", voice: "en-US-GuyNeural", persona: "precise, dry, to the point" },
-  { name: "Aria — bright & quick", voice: "en-US-AriaNeural", persona: "energetic, upbeat" },
-  { name: "Sonia — warm British assistant", voice: "en-GB-SoniaNeural", persona: "polite, friendly" },
-  { name: "Eric — nordic calm", voice: "en-US-EricNeural", persona: "low, steady, reassuring" },
-  { name: "Michelle — no-nonsense exec", voice: "en-US-MichelleNeural", persona: "direct, confident" },
-];
+export const VOICE_PRESETS: { name: string; voice: string; persona: string }[] = VOICE_PERSONAS.map(
+  (p) => ({ name: p.name, voice: p.voice, persona: p.persona })
+);
 
 interface DeepInitState {
   hydrated: boolean;
@@ -152,6 +148,41 @@ interface DeepInitState {
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
 export { uid, genPairingToken, genPortalToken, slugifyUser };
+
+/* ---------------- Voice Persona Passport — portal → gateway sync ---------------- */
+
+const VOICE_SYNC_DEBOUNCE_MS = 900;
+let voiceSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Push the web picker's voice persona (and rate/pitch) to the server-side
+ * gateway agent so Telegram voice notes sound EXACTLY like the console.
+ * Best-effort like the preset/brain sync; debounced for the sliders.
+ */
+function scheduleVoiceGatewaySync(): void {
+  if (typeof window === "undefined") return;
+  if (voiceSyncTimer) clearTimeout(voiceSyncTimer);
+  voiceSyncTimer = setTimeout(async () => {
+    voiceSyncTimer = null;
+    const s = useDeepInit.getState();
+    const ownerToken = s.profile.pairingToken;
+    if (!ownerToken) return; // local-only until paired
+    try {
+      await fetch("/api/agent/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ownerToken,
+          voiceId: s.voice.voice,
+          voiceRate: s.voice.rate,
+          voicePitch: s.voice.pitch,
+        }),
+      });
+    } catch {
+      /* best-effort — the picker still works locally */
+    }
+  }, VOICE_SYNC_DEBOUNCE_MS);
+}
 
 const defaultQuestionnaire: Questionnaire = {
   goals: [],
@@ -260,7 +291,15 @@ export const useDeepInit = create<DeepInitState>()(
         set((s) => ({ tunnels: s.tunnels.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
       removeTunnel: (id) => set((s) => ({ tunnels: s.tunnels.filter((t) => t.id !== id) })),
 
-      setVoice: (v) => set((s) => ({ voice: { ...s.voice, ...v } })),
+      setVoice: (v) => {
+        set((s) => ({ voice: { ...s.voice, ...v } }));
+        // Voice Persona Passport — push the sound of the agent to the
+        // Telegram gateway (best-effort, same pattern as preset/brain sync).
+        // Rate/pitch sliders fire rapidly → debounced.
+        if (v.voice !== undefined || v.rate !== undefined || v.pitch !== undefined) {
+          scheduleVoiceGatewaySync();
+        }
+      },
       addSkill: (sk) => set((s) => ({ skills: [...s.skills, sk] })),
       updateSkill: (id, patch) =>
         set((s) => ({ skills: s.skills.map((sk) => (sk.id === id ? { ...sk, ...patch } : sk)) })),

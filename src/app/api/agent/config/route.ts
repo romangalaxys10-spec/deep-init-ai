@@ -7,14 +7,16 @@ import {
 } from "@/lib/agent-registry";
 import { getPreset } from "@/lib/presets";
 import { normalizeBrainConfig } from "@/lib/brains";
+import { isKnownPersonaVoice } from "@/lib/voice-personas";
 
 export const maxDuration = 30;
 
 /**
  * Lightweight agent config updates from the portal — preset activation,
- * system prompt tweaks — without re-pairing the bot.
+ * system prompt tweaks, voice persona — without re-pairing the bot.
  * Body: { ownerToken, presetId?: string | null, systemPrompt?: string,
- *         brains?: { hermes?: boolean, moltis?: boolean } }
+ *         brains?: { hermes?: boolean, moltis?: boolean } | null,
+ *         voiceId?: string | null, voiceRate?: number, voicePitch?: number }
  */
 export async function POST(req: NextRequest) {
   let body: {
@@ -22,6 +24,9 @@ export async function POST(req: NextRequest) {
     presetId?: string | null;
     systemPrompt?: string;
     brains?: { hermes?: boolean; moltis?: boolean } | null;
+    voiceId?: string | null;
+    voiceRate?: number;
+    voicePitch?: number;
   };
   try {
     body = await req.json();
@@ -65,6 +70,18 @@ export async function POST(req: NextRequest) {
     agent.systemPrompt = body.systemPrompt.trim().slice(0, 8000);
   }
 
+  /* Voice Persona Passport — the web picker is the source of truth for how
+     the agent sounds everywhere, Telegram voice notes included. */
+  if (body.voiceId !== undefined) {
+    agent.voiceId = body.voiceId && isKnownPersonaVoice(body.voiceId) ? body.voiceId : undefined;
+  }
+  if (body.voiceRate !== undefined && Number.isFinite(body.voiceRate)) {
+    agent.voiceRate = Math.max(-50, Math.min(50, Math.round(body.voiceRate)));
+  }
+  if (body.voicePitch !== undefined && Number.isFinite(body.voicePitch)) {
+    agent.voicePitch = Math.max(-50, Math.min(50, Math.round(body.voicePitch)));
+  }
+
   touchAgent(agent);
   await persistRegistry();
 
@@ -74,5 +91,8 @@ export async function POST(req: NextRequest) {
     brains: normalizeBrainConfig(agent.brains),
     systemPrompt: agent.systemPrompt,
     agentName: agent.agentName,
+    voiceId: agent.voiceId ?? null,
+    voiceRate: agent.voiceRate ?? 0,
+    voicePitch: agent.voicePitch ?? 0,
   });
 }

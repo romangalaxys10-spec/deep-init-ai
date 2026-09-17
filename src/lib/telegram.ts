@@ -19,6 +19,10 @@ import { runAgentChainStreaming } from "./brain";
 import { brainSignature } from "./brains";
 import { transcribeAudio } from "./asr";
 import { extractVoiceBlocks, mdToSpeechText, synthesizeVoice, type VoiceOutMode } from "./voice-out";
+import { personaByVoice, personaLabel, VOICE_PERSONAS } from "./voice-personas";
+
+/** voice ids in picker order (module-level — the catalog is static) */
+const VOICE_PERSONA_IDS = VOICE_PERSONAS.map((p) => p.voice);
 import type { GatewayChat } from "./types";
 import {
   extractFileAttachments,
@@ -98,7 +102,7 @@ export async function tgGetMe(token: string) {
 export async function tgSetWebhook(token: string, url: string) {
   return tgCall<boolean>(token, "setWebhook", {
     url,
-    allowed_updates: ["message"],
+    allowed_updates: ["message", "callback_query"],
     drop_pending_updates: false,
   });
 }
@@ -111,7 +115,7 @@ export async function tgGetUpdates(token: string, offset: number) {
   return tgCall<{ update_id: number; message?: TelegramMessage }[]>(token, "getUpdates", {
     offset,
     timeout: 0,
-    allowed_updates: ["message"],
+    allowed_updates: ["message", "callback_query"],
   });
 }
 
@@ -221,6 +225,18 @@ export async function tgSendMessage(token: string, chatId: number, text: string)
   }
 }
 
+/** Close a callback-query spinner (must happen within a few seconds). */
+async function tgAnswerCallback(token: string, callbackQueryId: string, text?: string) {
+  try {
+    await tgCall(token, "answerCallbackQuery", {
+      callback_query_id: callbackQueryId,
+      ...(text ? { text: text.slice(0, 190), show_alert: false } : {}),
+    }, 8_000);
+  } catch {
+    /* non-fatal — the toast is cosmetic */
+  }
+}
+
 /**
  * Send a real file document (long code blocks are delivered as files,
  * never as chat walls). Multipart upload, UTF-8 text payload.
@@ -279,9 +295,10 @@ async function deliverVoiceNote(
   token: string,
   chatId: number,
   speakText: string,
-  caption?: string
+  caption?: string,
+  persona?: { voiceId?: string | null; rate?: number; pitch?: number }
 ): Promise<boolean> {
-  const synth = await synthesizeVoice(speakText);
+  const synth = await synthesizeVoice(speakText, persona);
   if (!synth.ok || !synth.bytes?.length) {
     return false;
   }
@@ -304,23 +321,28 @@ async function deliverReply(
   agent: RegisteredAgent,
   chatId: number,
   md: string,
-  opts?: { editMessageId?: number; speak?: boolean }
+  opts?: { editMessageId?: number; speak?: boolean; voiceId?: string | null }
 ): Promise<string> {
   const { text: cleaned, voiceTexts } = extractVoiceBlocks(md);
+  const persona = {
+    voiceId: opts?.voiceId,
+    rate: agent.voiceRate ?? 0,
+    pitch: agent.voicePitch ?? 0,
+  };
 
   await sendFormatted(agent.botToken, chatId, cleaned, opts?.editMessageId);
 
   // explicit voice blocks → individual voice notes (text re-joins on failure)
   const failedBlocks: string[] = [];
   for (const vt of voiceTexts) {
-    const spoken = await deliverVoiceNote(agent.botToken, chatId, mdToSpeechText(vt));
+    const spoken = await deliverVoiceNote(agent.botToken, chatId, mdToSpeechText(vt), undefined, persona);
     if (!spoken) failedBlocks.push(vt);
   }
 
   // voice mirror — the reply itself, spoken (only when the model didn't
   // already voice the answer via explicit blocks — never double-speak)
   if (opts?.speak && cleaned && !voiceTexts.length) {
-    await deliverVoiceNote(agent.botToken, chatId, mdToSpeechText(cleaned));
+    await deliverVoiceNote(agent.botToken, chatId, mdToSpeechText(cleaned), undefined, persona);
   }
 
   if (failedBlocks.length) {
@@ -331,6 +353,72 @@ async function deliverReply(
     );
   }
   return cleaned;
+}
+
+/* ---------------- voice persona picker (same catalog as the web console) ---------------- */
+
+/** Short button label, e.g. "🌟 Nova" (full name is too wide for a button). */
+function personaButtonLabel(voiceId: string, active: boolean): string {
+  const p = personaByVoice(voiceId);
+  const base = p ? `${p.emoji} ${p.name.split(" — ")[0]}` : voiceId;
+  return active ? `${base} ✅` : base;
+}
+
+/** The picker message text — shows the currently active persona. */
+function voicePickerText(chatVoiceId: string | undefined, agentVoiceId: string | undefined): string {
+  const active = chatVoiceId ?? agentVoiceId;
+  const source = chatVoiceId ? "(picked in this chat)" : agentVoiceId ? "(synced from the web console)" : "(default)";
+  return [
+    "🎙 Voice persona — how I sound",
+    `Current: ${personaLabel(active)} ${source}`.trim(),
+    "",
+    "Tap a persona to switch instantly — same voices as the web console picker.",
+    "Cyrillic and Hebrew replies automatically use a native voice of the same style.",
+  ].join("\n");
+}
+
+function voicePickerMarkup(chatVoiceId: string | undefined, agentVoiceId: string | undefined, mode: VoiceOutMode) {
+  const active = chatVoiceId ?? agentVoiceId;
+  const personaButtons = VOICE_PERSONA_IDS.map((v) => ({
+    text: personaButtonLabel(v, active === v),
+    callback_data: `vp:${v}`,
+  }));
+  // 2 personas per row, like the web popover's list
+  const rows: { text: string; callback_data: string }[][] = [];
+  for (let i = 0; i < personaButtons.length; i += 2) rows.push(personaButtons.slice(i, i + 2));
+  rows.push([
+    { text: chatVoiceId ? "↩ Follow web console" : "🔹 Default voice ✅", callback_data: "vp:default" },
+  ]);
+  const modeLabel = (m: VoiceOutMode, label: string) => ({
+    text: mode === m ? `${label} ✅` : label,
+    callback_data: `vm:${m}`,
+  });
+  rows.push([modeLabel("auto", "🎤 auto"), modeLabel("on", "🎙 always"), modeLabel("off", "💬 off")]);
+  return { inline_keyboard: rows };
+}
+
+/** Send (or re-render) the voice persona picker with inline buttons. */
+async function sendVoicePicker(
+  token: string,
+  chatId: number,
+  chatVoiceId: string | undefined,
+  agentVoiceId: string | undefined,
+  mode: VoiceOutMode,
+  editMessageId?: number
+): Promise<void> {
+  const body = {
+    chat_id: chatId,
+    text: voicePickerText(chatVoiceId, agentVoiceId),
+    reply_markup: voicePickerMarkup(chatVoiceId, agentVoiceId, mode),
+    disable_web_page_preview: true,
+  };
+  const r = editMessageId
+    ? await tgCall(token, "editMessageText", { ...body, message_id: editMessageId })
+    : await tgCall(token, "sendMessage", body);
+  if (!r.ok && editMessageId) {
+    // message too old to edit → send a fresh picker instead
+    await tgCall(token, "sendMessage", body);
+  }
 }
 
 const EDIT_MIN_INTERVAL_MS = 1_600; // Telegram rate-friendliness
@@ -424,7 +512,7 @@ async function streamReplyToChat(
   agent: RegisteredAgent,
   chatId: number,
   messages: { role: "system" | "user" | "assistant"; content: string }[],
-  opts?: { toolCtx?: { agentKey?: string; chatId?: number }; speak?: boolean }
+  opts?: { toolCtx?: { agentKey?: string; chatId?: number }; speak?: boolean; voiceId?: string | null }
 ): Promise<StreamReplyResult> {
   const token = agent.botToken;
 
@@ -547,10 +635,10 @@ async function streamReplyToChat(
   }
   if (st.previewSent && st.messageId) {
     // finalize: swap the preview for the fully formatted version (chunk-aware)
-    await deliverReply(agent, chatId, reply, { editMessageId: st.messageId, speak: opts?.speak });
+    await deliverReply(agent, chatId, reply, { editMessageId: st.messageId, speak: opts?.speak, voiceId: opts?.voiceId });
   } else {
     // no real message on the surface yet (draft-only or no preview) — send once
-    await deliverReply(agent, chatId, reply, { speak: opts?.speak });
+    await deliverReply(agent, chatId, reply, { speak: opts?.speak, voiceId: opts?.voiceId });
   }
   return { text: reply, ok: true };
 }
@@ -582,10 +670,18 @@ export interface TelegramMessage {
   document?: { file_id: string; file_name?: string; mime_type?: string };
 }
 
+export interface TelegramCallbackQuery {
+  id: string;
+  from?: { id: number; first_name?: string; language_code?: string };
+  message?: { message_id: number; chat: { id: number } };
+  data?: string;
+}
+
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   edited_message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
 }
 
 /** Matches "/start", "/start DIP-...", "dip-7k2m-9qx4" etc. */
@@ -761,19 +857,17 @@ async function handleCommand(
     await replyAndRecord(agent, chat.chatId, `Memory cleared for this thread (${chat.mode} context). Fresh start — what's next?`);
     return { handled: "hint", replyPreview: "thread reset" };
   }
-  if (cmd === "/voice") {
-    const cur: VoiceOutMode = chat.voiceOut ?? "auto";
-    const next: VoiceOutMode = cur === "auto" ? "on" : cur === "on" ? "off" : "auto";
-    chat.voiceOut = next;
-    touchAgent(agent);
-    const label =
-      next === "auto"
-        ? "auto — you send a voice note, I answer with a voice note (plus text)"
-        : next === "on"
-          ? "always — every reply arrives as a voice note (text too)"
-          : "off — replies are text only (explicit voice requests still work)";
-    await replyAndRecord(agent, chat.chatId, `🎙 Voice replies: ${next}\n${label}`);
-    return { handled: "hint", replyPreview: `/voice → ${next}` };
+  if (cmd === "/voice" || cmd === "/voices") {
+    // full persona picker — the same catalog as the web console popover,
+    // with the voice-reply mode row on the bottom (auto / always / off)
+    await sendVoicePicker(
+      agent.botToken,
+      chat.chatId,
+      chat.voiceId,
+      agent.voiceId,
+      chat.voiceOut ?? "auto"
+    );
+    return { handled: "hint", replyPreview: "voice picker sent" };
   }
   if (cmd === "/help") {
     await replyAndRecord(
@@ -790,7 +884,7 @@ async function handleCommand(
         "",
         "Commands:",
         "/status — what I am and what's wired",
-        "/voice — voice replies: auto → always → off",
+        "/voice — voice settings: persona picker + reply mode (same voices as the web console)",
         "/reset — clear this thread's memory",
         "/help — this list",
       ].join("\n"),
@@ -825,6 +919,61 @@ async function handleCommand(
 }
 
 /**
+ * Inline-keyboard button presses (voice persona / reply-mode picker).
+ * vp:<voice|default> — persona pick; vm:<mode> — voice-reply mode pick.
+ */
+async function handleVoiceCallback(
+  botToken: string,
+  cb: TelegramCallbackQuery
+): Promise<UpdateOutcome> {
+  const chatId = cb.message?.chat.id;
+  if (!chatId) return { handled: "ignored" };
+
+  const agent = findBoundAgent(botToken, chatId);
+  if (!agent) {
+    await tgAnswerCallback(botToken, cb.id, "Pair this chat first — send your pairing token.");
+    return { handled: "hint", replyPreview: "callback from unpaired chat" };
+  }
+  const chat = agent.chats.get(chatId);
+  if (!chat) return { handled: "ignored" };
+
+  const data = (cb.data || "").trim();
+  const vp = data.match(/^vp:(.+)$/);
+  const vm = data.match(/^vm:(auto|on|off)$/);
+
+  if (vp) {
+    const voiceId = vp[1] === "default" ? undefined : vp[1];
+    if (voiceId && !personaByVoice(voiceId)) {
+      await tgAnswerCallback(botToken, cb.id, "Unknown voice");
+      return { handled: "hint", replyPreview: `unknown voice ${vp[1]}` };
+    }
+    chat.voiceId = voiceId;
+    touchAgent(agent);
+    await tgAnswerCallback(botToken, cb.id, `Voice: ${personaLabel(chat.voiceId ?? agent.voiceId)}`);
+    await sendVoicePicker(botToken, chatId, chat.voiceId, agent.voiceId, chat.voiceOut ?? "auto", cb.message?.message_id);
+    return { handled: "hint", replyPreview: `voice → ${chat.voiceId ?? "default"}` };
+  }
+
+  if (vm) {
+    const mode = vm[1] as VoiceOutMode;
+    chat.voiceOut = mode;
+    touchAgent(agent);
+    const label =
+      mode === "auto"
+        ? "you talk, I talk back (plus text)"
+        : mode === "on"
+          ? "every reply arrives as a voice note"
+          : "replies are text only";
+    await tgAnswerCallback(botToken, cb.id, `Voice replies: ${mode} — ${label}`);
+    await sendVoicePicker(botToken, chatId, chat.voiceId, agent.voiceId, mode, cb.message?.message_id);
+    return { handled: "hint", replyPreview: `voiceOut → ${mode}` };
+  }
+
+  await tgAnswerCallback(botToken, cb.id);
+  return { handled: "ignored" };
+}
+
+/**
  * Processes one Telegram update against the gateway registry.
  * This is the single code path shared by webhook + poll bridge.
  */
@@ -832,6 +981,11 @@ export async function handleTelegramUpdate(
   update: TelegramUpdate,
   botToken: string
 ): Promise<UpdateOutcome> {
+  /* 0) inline-keyboard button presses (voice persona picker) */
+  if (update.callback_query?.data) {
+    return handleVoiceCallback(botToken, update.callback_query);
+  }
+
   const msg = update.message || update.edited_message;
   if (!msg) return { handled: "ignored" };
 
@@ -937,14 +1091,18 @@ export async function handleTelegramUpdate(
     ];
 
     /* VoiceOut: user spoke → the agent talks back (mode "auto"), or always
-       when the chat is set to "on" — deterministic, model-independent. */
+       when the chat is set to "on" — deterministic, model-independent.
+       Persona: this chat's pick, else the account voice synced from the
+       web console picker (Voice Persona Passport). */
     const spoken = Boolean(msg.voice || msg.audio);
     const voiceOut: VoiceOutMode = boundChat.voiceOut ?? "auto";
     const speak = voiceOut === "on" || (voiceOut === "auto" && spoken);
+    const voiceId = boundChat.voiceId ?? agent.voiceId;
 
     const out = await streamReplyToChat(agent, chatId, messages, {
       toolCtx: { agentKey: agent.key, chatId },
       speak,
+      voiceId,
     });
 
     pushThread(thread, { role: "assistant", content: out.text });

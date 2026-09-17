@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { persistRegistry, refreshRegistry, registerAgent } from "@/lib/agent-registry";
 import { BUILTIN_BOT_TOKEN, tgDeleteWebhook, tgGetMe, tgSetWebhook } from "@/lib/telegram";
 import type { ChatRequest } from "@/lib/types";
+import { isKnownPersonaVoice } from "@/lib/voice-personas";
 
 export const maxDuration = 30;
 
@@ -15,6 +16,10 @@ interface PairConfig {
   providers?: ChatRequest["providers"];
   allowDemoBrain?: boolean;
   whitelist?: { token: string; name: string; mode: "shared" | "isolated" }[];
+  /** Voice Persona Passport — how the agent sounds on every surface */
+  voiceId?: string;
+  voiceRate?: number;
+  voicePitch?: number;
 }
 
 function isLocalHost(host: string): boolean {
@@ -93,6 +98,15 @@ export async function POST(req: NextRequest) {
         providers: Array.isArray(cfg.providers) ? cfg.providers : [],
         allowDemoBrain: cfg.allowDemoBrain !== false,
         whitelist: Array.isArray(cfg.whitelist) ? cfg.whitelist : [],
+        ...(cfg.voiceId !== undefined
+          ? { voiceId: isKnownPersonaVoice(cfg.voiceId) ? cfg.voiceId : undefined }
+          : {}),
+        ...(typeof cfg.voiceRate === "number" && Number.isFinite(cfg.voiceRate)
+          ? { voiceRate: Math.max(-50, Math.min(50, Math.round(cfg.voiceRate))) }
+          : {}),
+        ...(typeof cfg.voicePitch === "number" && Number.isFinite(cfg.voicePitch)
+          ? { voicePitch: Math.max(-50, Math.min(50, Math.round(cfg.voicePitch))) }
+          : {}),
       });
       await persistRegistry();
     }

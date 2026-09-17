@@ -19,6 +19,8 @@
  * user talks via voice note, the reply is spoken back automatically.
  * ============================================================ */
 
+import { personaVoicePlan } from "./voice-personas";
+
 export type VoiceOutMode = "auto" | "on" | "off";
 
 /* ---------------- 1. voice-block extraction ---------------- */
@@ -115,6 +117,18 @@ export interface SynthResult {
   error?: string;
 }
 
+export interface SynthOptions {
+  /** persona voice id from the picker (web console / Telegram /voice).
+   *  A known persona pins the Edge tier FIRST with that voice — the
+   *  z-ai tier cannot reproduce these voices and would otherwise drown
+   *  every pick in its fixed default (the "stuck Asian female" bug). */
+  voiceId?: string | null;
+  /** speaking-rate tweak from the web picker, -50..50 (%) */
+  rate?: number;
+  /** pitch tweak from the web picker, -50..50 (Hz) */
+  pitch?: number;
+}
+
 /** z-ai SDK tier — best quality voices, needs cloud reachability.
  *  SDK quirk (probed live): create() returns a raw Response object and the
  *  endpoint only accepts response_format "wav" (mp3/ogg/opus → HTTP 400). */
@@ -144,39 +158,72 @@ async function synthViaZai(text: string): Promise<SynthResult> {
   }
 }
 
-/** msedge-tts tier — keyless, no provider account, works on any host. */
-async function synthViaEdge(text: string): Promise<SynthResult> {
+/** msedge-tts tier — keyless, no provider account, works on any host.
+ *  Carries the persona: voice id + optional rate/pitch tweaks.
+ *  One empty-retry with a fresh connection — rapid websocket opens can
+ *  return a 0-byte stream (observed under bursty back-to-back calls). */
+async function synthViaEdge(
+  text: string,
+  voice = "en-US-AvaNeural",
+  rate = 0,
+  pitch = 0
+): Promise<SynthResult> {
   try {
     const { MsEdgeTTS, OUTPUT_FORMAT } = await import("msedge-tts");
-    const tts = new MsEdgeTTS({ enableLogger: false });
-    await tts.setMetadata("en-US-AvaNeural", OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-    const { audioStream } = tts.toStream(text.slice(0, 4000));
-    const chunks: Buffer[] = [];
-    await new Promise<void>((resolve, reject) => {
-      audioStream.on("data", (c: Buffer) => chunks.push(c));
-      audioStream.on("end", () => resolve());
-      audioStream.on("error", reject);
-      const t = setTimeout(() => reject(new Error("edge tts timeout")), 40_000);
-      audioStream.on("end", () => clearTimeout(t));
-    });
-    const audio = Buffer.concat(chunks);
-    if (!audio.length) return { ok: false, error: "edge tts returned no audio" };
-    return { ok: true, bytes: new Uint8Array(audio), via: "edge-tts" };
+    const spoken = text.slice(0, 4000);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const tts = new MsEdgeTTS({ enableLogger: false });
+        await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+        const { audioStream } = tts.toStream(spoken, {
+          rate: `${rate}%`,
+          pitch: `${pitch}Hz`,
+        } as never);
+        const chunks: Buffer[] = [];
+        await new Promise<void>((resolve, reject) => {
+          audioStream.on("data", (c: Buffer) => chunks.push(c));
+          audioStream.on("end", () => resolve());
+          audioStream.on("error", reject);
+          const t = setTimeout(() => reject(new Error("edge tts timeout")), 40_000);
+          audioStream.on("end", () => clearTimeout(t));
+        });
+        const audio = Buffer.concat(chunks);
+        if (audio.length) return { ok: true, bytes: new Uint8Array(audio), via: `edge-tts:${voice}` };
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 900)); // throttle cool-off, then retry
+        continue;
+      } catch (e) {
+        if (attempt === 1) throw e;
+      }
+    }
+    return { ok: false, error: "edge tts returned no audio" };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
 /**
- * Synthesize speakable text to MP3 bytes: z-ai cloud tier first, keyless
- * edge tier second — so voice delivery survives dead cloud egress.
+ * Synthesize speakable text to audio bytes with the caller's persona:
+ *  • persona picked  → Edge tier FIRST with that exact voice (+ rate/pitch),
+ *    z-ai cloud tier only as the reliability fallback (different voice set)
+ *  • no persona      → legacy chain: z-ai cloud first, keyless Edge second —
+ *    voice delivery survives dead cloud egress either way
  */
-export async function synthesizeVoice(speakText: string): Promise<SynthResult> {
+export async function synthesizeVoice(speakText: string, opts?: SynthOptions): Promise<SynthResult> {
   const text = speakText.trim();
   if (!text) return { ok: false, error: "no text to speak" };
+  const plan = personaVoicePlan(opts?.voiceId, text);
+  const rate = Math.max(-50, Math.min(50, Math.round(opts?.rate ?? 0)));
+  const pitch = Math.max(-50, Math.min(50, Math.round(opts?.pitch ?? 0)));
+  if (plan.personaPinned) {
+    const edge = await synthViaEdge(text, plan.edgeVoice, rate, pitch);
+    if (edge.ok) return edge;
+    const zai = await synthViaZai(text);
+    if (zai.ok) return zai;
+    return { ok: false, error: `${edge.error} | ${zai.error}` };
+  }
   const zai = await synthViaZai(text);
   if (zai.ok) return zai;
-  const edge = await synthViaEdge(text);
+  const edge = await synthViaEdge(text, plan.edgeVoice, rate, pitch);
   if (edge.ok) return edge;
   return { ok: false, error: `${zai.error} | ${edge.error}` };
 }
