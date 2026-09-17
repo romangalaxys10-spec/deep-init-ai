@@ -201,3 +201,27 @@ Stage Summary:
 - Voice mode live on production: hands-free conversation loop, all green 10/10 e2e
 - Repo starred ✓
 - Commits pushed: voice mode + demo-brain race cap; deployment deep-init-dwcuekg40
+
+---
+Task ID: voice+dup-fix
+Agent: main (Super Z)
+Task: Fix prod bugs — web voice mode errors, Telegram voice transcription dead, agent replying TWICE; add Z.AI GLM Coding Plan invite to README hero
+
+Work Log:
+- Root-caused all three: (1) web voice = browser SpeechRecognition depends on vendor speech servers reachable from the USER's network → error with no fallback; (2) Telegram voice = ASR via z-ai SDK internal endpoint (internal-api.z.ai) unreachable from Vercel → always failed; (3) dup replies = streamReplyToChat fired the draft→placeholder claim ASYNC (~300-500ms Telegram RTT); fast replies (reflex) finished in ~45ms, final sendFormatted sent a NEW message while the placeholder was still in flight → the reply landed TWICE; plus no update_id dedupe (webhook retries/poll overlap)
+- NEW src/lib/asr.ts — keyless server-side ASR chain working on any host: OGG/Opus (Telegram voice) → ogg-opus-decoder WASM → 48k float → resample 16k mono → WAV → Google Web Speech API v2 (chromium public key, proven from cloud IPs: 0.97 confidence); WAV decode (PCM 8/16/24/32 + float32, any rate, mono fold); z-ai SDK tier as fallback; cleanTranscript() drops symbol-only junk ("#" from tones); normLang maps loose hints (ru→ru-RU, he/iw→he-IL)
+- NEW /api/voice/stt (JSON base64 + multipart) — the web intake for the same chain
+- telegram.ts: transcribeTelegramVoice rewritten on transcribeAudio (lang from from.language_code); sendFormatted path unchanged
+- Web voice mode (voice.tsx): openVoiceCapture() — getUserMedia → AudioContext(16k) → AudioWorklet (inline blob, ScriptProcessor fallback) → RMS VAD (160ms ramp, 1200ms trailing silence, 15s cap) → WAV encode in browser → POST /api/voice/stt; useVoiceMode escalates to compat engine on network/audio-capture/service-not-allowed errors, starts natively in compat on Firefox, mic-denied handling; pcmStart⇄pcmCommit recursion via refs; hold()/stop()/listenAgain() teach compat; useDictation (mic button) also falls back to PCM single-shot; VoiceBar shows compat chip + micDenied/sttFail notes; i18n vm.compat/vm.micDenied/vm.sttFail (EN/RU/HE)
+- Dup fix: st.surface promise — claimSurface() runs once (draft → editable placeholder), final send ALWAYS awaits it then edits (messageId) or sends once; failure path finalizes claimed surface (no dangling preview, error notice delivered once); webhook route acks INSTANTLY via next/server after() (handler runs in background window — Telegram never retries on slow replies); markUpdateSeen() per-bot update_id ledger (600 entries, 2h TTL) in webhook + poll
+- next.config serverExternalPackages += ogg-opus-decoder (+ @wasm-audio-decoders/*)
+- Webhook re-armed to canonical https://deep-init-ai.vercel.app/api/telegram/webhook (was pointing at deep-init.space-z.ai proxy with a recent "Read timeout expired" — the old slow-ack handler's retry bait, now structurally gone)
+- README: "🎁 Need the Z.AI GLM Coding Plan? … 10% OFF → z.ai/subscribe?ic=ROK78RJKNW" in the hero under the badges; voice feature row updated (any-browser compat + Telegram voice notes)
+- Tests: test-asr.ts 23/23 (live EN + RU OGG transcription, WAV roundtrip, resampler, graceful failures); test-dup-fix.mts 10/10 — deterministic race repro with mocked Telegram (800ms RTT): EXACTLY ONE sendMessage per reply, redelivered update dropped, second utterance still single; e2e-voice-fallback.mjs 9/9 on PRODUCTION (dead-SR browser → compat chip → VAD commit → real STT POST → loop resumes); e2e-voice.mjs 10/10 on production (SR path unregressed); verify-prod-stt.mjs — real OGG voice note → prod transcript 200 via google stt
+- Regression: test-tools 30/30, test-telegram-format 17/17, test-attachments 29/29, test-brains 76/76, test-parity 63/63, streaming PASS; eslint --max-warnings=0 clean; tsc src clean
+
+Stage Summary:
+- Voice works BOTH ways on every deployment now: Telegram voice notes transcribe (keyless cloud ASR), web voice mode survives blocked/missing SpeechRecognition via compat capture, and replies are spoken as before
+- Double replies eliminated at two layers (surface-claim race + update ledger + instant webhook ack)
+- Deploy: deep-init-obc0bk428 (Ready), prod verified — landing 200, /api/voice/stt live transcription PASS, both voice e2e suites green against production
+- Commits: 2fb1067 (fix), 3795989 (test tooling) → origin/main
