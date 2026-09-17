@@ -63,7 +63,10 @@ function reflexHelp(): string {
 
 /** Strict whitelist arithmetic: digits, operators, brackets only. */
 function safeArithmetic(raw: string): number | null {
-  let expr = raw.toLowerCase().replace(/[_,\s]/g, "");
+  let expr = raw
+    .toLowerCase()
+    .replace(/[?!.,;:]\s*$/g, "")
+    .replace(/[_,\s]/g, "");
   // "17.5% of 2384*12" → "(17.5/100)*(2384*12)"
   expr = expr.replace(/(\d+(?:\.\d+)?)%of([\d.()+\-*/^]+)/g, "($1/100)*($2)");
   expr = expr.replace(/%/g, "/100");
@@ -148,16 +151,17 @@ export function reflexReply(userText: string, agentName = "Init"): ReflexReply {
     };
   }
 
-  /* arithmetic */
-  const math = safeArithmetic(text);
+  /* arithmetic — strip conversational wrappers & trailing punctuation */
+  const mathProbe = text.replace(/[?!]+\s*$/g, "").trim();
+  const math = safeArithmetic(mathProbe);
   if (math !== null) {
     return {
       via,
-      content: `🧮 \`${text.replace(/[_\s]/g, "")}\` = **${fmtNum(math)}**`,
+      content: `🧮 \`${mathProbe.replace(/[_\s]/g, "")}\` = **${fmtNum(math)}**`,
     };
   }
-  if (/(calculate|compute|what is|сколько|сколько будет)/i.test(low)) {
-    const inner = text.replace(/^(what is|calculate|compute|сколько будет)\s*/i, "");
+  if (/(calculate|compute|what is|how much is|what.s|сколько|сколько будет)/i.test(low)) {
+    const inner = mathProbe.replace(/^(what is|how much is|calculate|compute|сколько будет)\s*/i, "");
     const innerMath = safeArithmetic(inner);
     if (innerMath !== null) {
       return {
