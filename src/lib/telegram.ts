@@ -18,6 +18,7 @@ import {
 import { runAgentChainStreaming } from "./brain";
 import { brainSignature } from "./brains";
 import { transcribeAudio } from "./asr";
+import { extractVoiceBlocks, mdToSpeechText, synthesizeVoice, type VoiceOutMode } from "./voice-out";
 import type { GatewayChat } from "./types";
 import {
   extractFileAttachments,
@@ -269,6 +270,69 @@ ${file.content}`);
   }
 }
 
+/**
+ * Synthesize text and deliver it as a REAL Telegram voice note (the
+ * waveform bubble, not an audio-file player). Falls back voice → audio;
+ * returns false only when both uploads fail.
+ */
+async function deliverVoiceNote(
+  token: string,
+  chatId: number,
+  speakText: string,
+  caption?: string
+): Promise<boolean> {
+  const synth = await synthesizeVoice(speakText);
+  if (!synth.ok || !synth.bytes?.length) {
+    return false;
+  }
+  if (await tgSendVoiceBytes(token, chatId, synth.bytes, caption)) return true;
+  // sendVoice rejected the payload — the audio player still delivers it
+  return tgSendAudioBytes(token, chatId, synth.bytes, caption || "voice note");
+}
+
+/**
+ * Deterministic VoiceOut delivery — the single path every agent reply takes:
+ *  1. <tts>/<voice>/<audio> blocks the model emitted are extracted and sent
+ *     as REAL voice notes (hallucinated protocols come true; tags never leak)
+ *  2. the cleaned reply is sent as formatted text
+ *  3. when `speak` is set (voice mirror mode), the whole reply is spoken back
+ *     as a voice note — user talks, the agent talks
+ * Text always goes out first, so the user never loses content if TTS fails;
+ * if a voice block cannot be synthesized its text re-joins the chat.
+ */
+async function deliverReply(
+  agent: RegisteredAgent,
+  chatId: number,
+  md: string,
+  opts?: { editMessageId?: number; speak?: boolean }
+): Promise<string> {
+  const { text: cleaned, voiceTexts } = extractVoiceBlocks(md);
+
+  await sendFormatted(agent.botToken, chatId, cleaned, opts?.editMessageId);
+
+  // explicit voice blocks → individual voice notes (text re-joins on failure)
+  const failedBlocks: string[] = [];
+  for (const vt of voiceTexts) {
+    const spoken = await deliverVoiceNote(agent.botToken, chatId, mdToSpeechText(vt));
+    if (!spoken) failedBlocks.push(vt);
+  }
+
+  // voice mirror — the reply itself, spoken (only when the model didn't
+  // already voice the answer via explicit blocks — never double-speak)
+  if (opts?.speak && cleaned && !voiceTexts.length) {
+    await deliverVoiceNote(agent.botToken, chatId, mdToSpeechText(cleaned));
+  }
+
+  if (failedBlocks.length) {
+    await tgSendMessage(
+      agent.botToken,
+      chatId,
+      `🔊 (voice synthesis unavailable — as text:)\n\n${failedBlocks.join("\n\n")}`.slice(0, 3800)
+    );
+  }
+  return cleaned;
+}
+
 const EDIT_MIN_INTERVAL_MS = 1_600; // Telegram rate-friendliness
 const EDIT_MIN_NEW_CHARS = 48;
 
@@ -325,10 +389,13 @@ export async function sendFormatted(
       }
     }
     if (bytes) {
-      if (/\.ogg$/i.test(a.url)) {
-        await tgSendVoiceBytes(token, chatId, bytes, a.caption);
+      // voice-note bubble first (ogg/wav/mp3 all accepted by Telegram and
+      // transcoded server-side); audio-player fallback if sendVoice refuses
+      if (/\.(ogg|wav|mp3|m4a|opus)$/i.test(a.url)) {
+        const sent = await tgSendVoiceBytes(token, chatId, new Uint8Array(bytes), a.caption);
+        if (!sent) await tgSendAudioBytes(token, chatId, new Uint8Array(bytes), a.caption || "voice note");
       } else {
-        await tgSendAudioBytes(token, chatId, bytes, a.caption || "voice note");
+        await tgSendAudioBytes(token, chatId, new Uint8Array(bytes), a.caption || "voice note");
       }
     } else if (a.url.startsWith("http")) {
       await tgSendMessage(token, chatId, a.url);
@@ -357,7 +424,7 @@ async function streamReplyToChat(
   agent: RegisteredAgent,
   chatId: number,
   messages: { role: "system" | "user" | "assistant"; content: string }[],
-  toolCtx?: { agentKey?: string; chatId?: number }
+  opts?: { toolCtx?: { agentKey?: string; chatId?: number }; speak?: boolean }
 ): Promise<StreamReplyResult> {
   const token = agent.botToken;
 
@@ -416,7 +483,7 @@ async function streamReplyToChat(
     messages,
     allowDemoBrain: agent.allowDemoBrain,
     brains: agent.brains,
-    toolCtx: toolCtx || { agentKey: agent.key, chatId },
+    toolCtx: opts?.toolCtx || { agentKey: agent.key, chatId },
     onEvent: (ev) => {
       if (ev.type !== "delta") return;
       const full = ev.text;
@@ -480,10 +547,10 @@ async function streamReplyToChat(
   }
   if (st.previewSent && st.messageId) {
     // finalize: swap the preview for the fully formatted version (chunk-aware)
-    await sendFormatted(token, chatId, reply, st.messageId);
+    await deliverReply(agent, chatId, reply, { editMessageId: st.messageId, speak: opts?.speak });
   } else {
     // no real message on the surface yet (draft-only or no preview) — send once
-    await sendFormatted(token, chatId, reply);
+    await deliverReply(agent, chatId, reply, { speak: opts?.speak });
   }
   return { text: reply, ok: true };
 }
@@ -694,6 +761,20 @@ async function handleCommand(
     await replyAndRecord(agent, chat.chatId, `Memory cleared for this thread (${chat.mode} context). Fresh start — what's next?`);
     return { handled: "hint", replyPreview: "thread reset" };
   }
+  if (cmd === "/voice") {
+    const cur: VoiceOutMode = chat.voiceOut ?? "auto";
+    const next: VoiceOutMode = cur === "auto" ? "on" : cur === "on" ? "off" : "auto";
+    chat.voiceOut = next;
+    touchAgent(agent);
+    const label =
+      next === "auto"
+        ? "auto — you send a voice note, I answer with a voice note (plus text)"
+        : next === "on"
+          ? "always — every reply arrives as a voice note (text too)"
+          : "off — replies are text only (explicit voice requests still work)";
+    await replyAndRecord(agent, chat.chatId, `🎙 Voice replies: ${next}\n${label}`);
+    return { handled: "hint", replyPreview: `/voice → ${next}` };
+  }
   if (cmd === "/help") {
     await replyAndRecord(
       agent,
@@ -702,12 +783,14 @@ async function handleCommand(
         `${agent.agentName} — your personal agent (Deep-init AI)`,
         "",
         "Just talk to me: ask questions, send tasks, paste text, forward links.",
-        "🎤 Voice notes → I transcribe and answer. 📷 Photos → I analyze them.",
+        "🎤 Voice notes → I transcribe and answer — and talk back (send /voice to switch modes).",
+        "📷 Photos → I analyze them.",
         "",
         "Tools I can run: live web search, page reading, image search & generation, voice notes (TTS), long-term memory, scheduled reminders. Long code arrives as files.",
         "",
         "Commands:",
         "/status — what I am and what's wired",
+        "/voice — voice replies: auto → always → off",
         "/reset — clear this thread's memory",
         "/help — this list",
       ].join("\n"),
@@ -853,9 +936,15 @@ export async function handleTelegramUpdate(
       ...thread,
     ];
 
+    /* VoiceOut: user spoke → the agent talks back (mode "auto"), or always
+       when the chat is set to "on" — deterministic, model-independent. */
+    const spoken = Boolean(msg.voice || msg.audio);
+    const voiceOut: VoiceOutMode = boundChat.voiceOut ?? "auto";
+    const speak = voiceOut === "on" || (voiceOut === "auto" && spoken);
+
     const out = await streamReplyToChat(agent, chatId, messages, {
-      agentKey: agent.key,
-      chatId,
+      toolCtx: { agentKey: agent.key, chatId },
+      speak,
     });
 
     pushThread(thread, { role: "assistant", content: out.text });

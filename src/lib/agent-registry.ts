@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 import type { ChatRequest } from "./types";
 import type { BrainConfig } from "./brains";
+import type { VoiceOutMode } from "./voice-out";
 
 /* ============================================================
  * Server-side agent gateway registry
@@ -36,6 +37,8 @@ export interface ChatState {
   lastAt: number;
   /** private thread — used when mode === "isolated" */
   thread: ChatMsg[];
+  /** voice reply mode: auto (voice-in → voice-out, default) | on | off */
+  voiceOut?: VoiceOutMode;
 }
 
 export interface RegisteredAgent {
@@ -489,6 +492,7 @@ export function bindChat(
     boundAt: existing?.boundAt ?? Date.now(),
     lastAt: Date.now(),
     thread: existing?.thread ?? [],
+    voiceOut: existing?.voiceOut ?? "auto",
   };
   agent.chats.set(chatId, state);
   agent.lastSeen = Date.now();
