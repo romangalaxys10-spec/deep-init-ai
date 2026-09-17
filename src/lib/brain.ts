@@ -1,4 +1,5 @@
 import type { ChatRequest, FallbackStep } from "./types";
+import { brainPromptBlock, type BrainConfig } from "./brains";
 import {
   AGENT_GUARDRAILS,
   executeToolCalls,
@@ -18,14 +19,18 @@ type Msg = ChatRequest["messages"][number];
  * Hardened system prompt: models behind custom providers sometimes narrate
  * internal protocols or print raw tool-call syntax — these rules tell them
  * to keep internal context internal. Appended once, at engine entry.
+ * When brain packs are enabled, their ported cognition layers are composed
+ * right after the guardrails (same system message, single cacheable prefix).
  */
-function withGuardrails(messages: Msg[]): Msg[] {
+function withGuardrails(messages: Msg[], brains?: BrainConfig): Msg[] {
+  const brainBlock = brainPromptBlock(brains);
+  const suffix = brainBlock ? `${AGENT_GUARDRAILS}\n\n${brainBlock}` : AGENT_GUARDRAILS;
   const msgs = messages.map((m) => ({ ...m }));
   const i = msgs.findIndex((m) => m.role === "system");
   if (i >= 0) {
-    msgs[i] = { ...msgs[i], content: `${msgs[i].content}\n\n${AGENT_GUARDRAILS}` };
+    msgs[i] = { ...msgs[i], content: `${msgs[i].content}\n\n${suffix}` };
   } else {
-    msgs.unshift({ role: "system", content: AGENT_GUARDRAILS });
+    msgs.unshift({ role: "system", content: suffix });
   }
   return msgs;
 }
@@ -215,6 +220,8 @@ interface StreamOpts {
   onEvent?: (ev: StreamEvent) => void;
   /** gateway context for agent-scoped tools (memory, reminders) */
   toolCtx?: ToolContext;
+  /** enabled cognition packs (Hermes / Moltis brains) */
+  brains?: BrainConfig;
 }
 
 /** Reads an SSE body and yields raw `data:` payload strings. */
@@ -499,7 +506,7 @@ async function runChainOnceStreaming(
 export async function runAgentChainStreaming(opts: StreamOpts): Promise<ChainResult> {
   const providers = (opts.providers || []).filter((p) => p && p.baseUrl && p.model).slice(0, 10);
   const fallbackChain: FallbackStep[] = [];
-  let messages = withGuardrails(opts.messages);
+  let messages = withGuardrails(opts.messages, opts.brains);
   let prefix = ""; // visible text from completed tool rounds (preview-only)
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
@@ -634,10 +641,11 @@ export async function runAgentChain(opts: {
   messages: Msg[];
   allowDemoBrain?: boolean;
   toolCtx?: ToolContext;
+  brains?: BrainConfig;
 }): Promise<ChainResult> {
   const providers = (opts.providers || []).filter((p) => p && p.baseUrl && p.model).slice(0, 10);
   const fallbackChain: FallbackStep[] = [];
-  let messages = withGuardrails(opts.messages);
+  let messages = withGuardrails(opts.messages, opts.brains);
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     const result = await runChainOnce(providers, messages, opts.allowDemoBrain, fallbackChain);

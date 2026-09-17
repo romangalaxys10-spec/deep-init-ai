@@ -84,10 +84,11 @@ function collectMatches(text: string, re: RegExp, map: (m: RegExpExecArray) => T
  *  • <function name="NAME">…</function>
  *  • <tool_call>{"name":…,"arguments":…}</tool_call>          (Qwen-style)
  *  • <invoke name="NAME"><parameter name="K">v</parameter></invoke>
+ *  • ```tool_call\n{"tool":…,"arguments":{…}}\n```   (Moltis brain dialect)
  * Returns the calls plus text with every block removed.
  */
 export function extractToolCalls(text: string): { calls: ToolCall[]; cleaned: string } {
-  if (!text.includes("<")) return { calls: [], cleaned: text };
+  if (!text.includes("<") && !text.includes("```tool_call")) return { calls: [], cleaned: text };
 
   const calls: ToolCall[] = [];
   const ranges: [number, number][] = [];
@@ -109,6 +110,34 @@ export function extractToolCalls(text: string): { calls: ToolCall[]; cleaned: st
   }));
   calls.push(...inv.calls);
   ranges.push(...inv.ranges);
+
+  // Moltis dialect: ```tool_call\n{"tool":"name","arguments":{...}}\n```
+  // (ported from moltis-org/moltis crates/agents/prompt/formatting.rs)
+  const moltisRe = /```tool_call\s*\n([\s\S]*?)```/g;
+  const moltis = collectMatches(text, moltisRe, (m) => {
+    let params: Record<string, string> = {};
+    let name = "";
+    try {
+      const obj = JSON.parse(m[1].trim()) as {
+        tool?: string;
+        name?: string;
+        arguments?: Record<string, unknown>;
+        args?: Record<string, unknown>;
+      };
+      name = String(obj.tool ?? obj.name ?? "");
+      const args = obj.arguments ?? obj.args ?? {};
+      for (const [k, v] of Object.entries(args)) {
+        if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+          params[k] = String(v);
+        }
+      }
+    } catch {
+      /* malformed — no params */
+    }
+    return { name, params };
+  });
+  calls.push(...moltis.calls);
+  ranges.push(...moltis.ranges);
 
   // <tool_call>{json}</tool_call>
   const tcRe = /<tool_call>([\s\S]*?)<\/tool_call\s*>/g;
@@ -158,11 +187,16 @@ function cutUnterminatedTail(text: string): string {
     ["<parameter", "</parameter>"],
     ["<tool_call>", "</tool_call>"],
     ["<invoke", "</invoke>"],
+    // Moltis dialect: an unterminated fenced tool_call block would render as
+    // a broken code fence — cut it like any other half-streamed tool block.
+    ["`".repeat(3) + "tool_call", "`".repeat(3)],
   ];
   for (const [op, close] of openers) {
     let idx = text.lastIndexOf(op);
     while (idx >= 0) {
-      if (text.indexOf(close, idx) < 0) {
+      // search for the closer strictly AFTER the opener — for the moltis
+      // fence the closer (```) is a substring of the opener (```tool_call)
+      if (text.indexOf(close, idx + op.length) < 0) {
         // unterminated tail — cut it
         text = text.slice(0, idx);
         idx = text.lastIndexOf(op, idx - 1);
@@ -184,13 +218,43 @@ export function sanitizeAgentText(text: string): string {
   return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+/**
+ * Cuts a trailing fragment that is a strict PREFIX of a tool opener/closer
+ * (e.g. text ending "```tool_ca" or "<funct"). Applied to stream previews
+ * only: viewers never see even a fragment of tool syntax, and preview length
+ * becomes monotonic because a later-completed block removes exactly the text
+ * the partial cut was already hiding.
+ */
+const PARTIAL_HEADS = [
+  "<function",
+  "</function",
+  "<parameter",
+  "</parameter",
+  "<" + "tool_call",
+  "</" + "tool_call",
+  "<invoke",
+  "</invoke",
+  "`".repeat(3) + "tool_call",
+];
+function cutPartialTail(text: string): string {
+  const window = text.slice(-14);
+  for (const op of PARTIAL_HEADS) {
+    for (let l = Math.min(op.length - 1, window.length); l >= 1; l--) {
+      if (window.endsWith(op.slice(0, l))) {
+        return text.slice(0, text.length - l);
+      }
+    }
+  }
+  return text;
+}
+
 /** Streaming-view guarantee: additionally cuts a half-streamed tool block. */
 export function sanitizeStreamText(text: string): string {
   let out = extractToolCalls(text).cleaned;
   out = cutUnterminatedTail(out);
   out = out.replace(SPECIAL_TOKEN_RE, "");
   out = out.replace(/<\/?(function|parameter|tool_call|invoke)\b[^>]*>/gi, "");
-  return out;
+  return cutPartialTail(out);
 }
 
 /* ------------------------- execution ------------------------- */
@@ -505,13 +569,254 @@ async function runRemind(params: Record<string, string>, ctx?: ToolContext): Pro
   return `remind ok — I will message the user at ${new Date(dueAt).toISOString()} (in ${mins < 90 ? `${mins} min` : `${Math.round(mins / 60)} h`}): "${text.slice(0, 120)}".`;
 }
 
-const SEARCH_ALIASES = /search|find|look_?up|query/i;
-const FETCH_ALIASES = /fetch|read|open|browse|get_page|page_reader|curl/i;
+/* ---------------- calc (Moltis brain tool) — safe expression engine ----------------
+ * Recursive-descent evaluator: NO eval, NO Function(). Supports + - * / % ^,
+ * parentheses, unary minus, constants (pi, e, tau) and common functions.
+ * Any other token is a hard parse error — numbers/operators only.
+ */
+function runCalcExpression(raw: string): number {
+  const src = raw.replace(/[_\s]/g, "").replace(/×/g, "*").replace(/÷/g, "/");
+  let pos = 0;
+  const eat = (ch: string) => {
+    if (src[pos] === ch) {
+      pos++;
+      return true;
+    }
+    return false;
+  };
+  function number(): number {
+    const m = /^\d*\.?\d+(?:[eE][+-]?\d+)?/.exec(src.slice(pos));
+    if (!m) throw new Error(`unexpected token at ${pos}: "${src.slice(pos, pos + 6)}"`);
+    pos += m[0].length;
+    return parseFloat(m[0]);
+  }
+  function ident(): string {
+    const m = /^[a-z_][a-z0-9_]*/i.exec(src.slice(pos));
+    if (!m) throw new Error(`unexpected token at ${pos}`);
+    pos += m[0].length;
+    return m[0].toLowerCase();
+  }
+  function callArgs(): number[] {
+    const args: number[] = [expr()];
+    while (eat(",")) args.push(expr());
+    return args;
+  }
+  function primary(): number {
+    if (eat("(")) {
+      const v = expr();
+      if (!eat(")")) throw new Error("missing closing paren");
+      return v;
+    }
+    if (eat("-")) return -primary();
+    if (eat("+")) return primary();
+    const c = src[pos];
+    if (c && /[a-z_]/i.test(c)) {
+      const name = ident();
+      const consts: Record<string, number> = { pi: Math.PI, e: Math.E, tau: Math.PI * 2 };
+      if (name in consts) return consts[name];
+      const fns: Record<string, (...a: number[]) => number> = {
+        sqrt: Math.sqrt,
+        cbrt: Math.cbrt,
+        abs: Math.abs,
+        round: Math.round,
+        floor: Math.floor,
+        ceil: Math.ceil,
+        sin: Math.sin,
+        cos: Math.cos,
+        tan: Math.tan,
+        ln: Math.log,
+        log: Math.log10,
+        exp: Math.exp,
+      };
+      if (name in fns) {
+        if (!eat("(")) throw new Error(`expected ( after ${name}`);
+        const args = callArgs();
+        if (!eat(")")) throw new Error("missing closing paren");
+        return fns[name](...args);
+      }
+      if (name === "min" || name === "max") {
+        if (!eat("(")) throw new Error(`expected ( after ${name}`);
+        const args = callArgs();
+        if (!eat(")")) throw new Error("missing closing paren");
+        return name === "min" ? Math.min(...args) : Math.max(...args);
+      }
+      throw new Error(`unknown identifier "${name}"`);
+    }
+    return number();
+  }
+  function power(): number {
+    const base = primary();
+    if (eat("^")) return Math.pow(base, power());
+    if (src[pos] === "*" && src[pos + 1] === "*") {
+      pos += 2;
+      return Math.pow(base, power());
+    }
+    return base;
+  }
+  function term(): number {
+    let v = power();
+    for (;;) {
+      if (eat("/")) v /= power();
+      else if (eat("%")) v %= power();
+      else if (src[pos] === "*") {
+        if (src[pos + 1] === "*") {
+          pos += 2;
+          v = Math.pow(v, power());
+        } else {
+          pos++;
+          v *= power();
+        }
+      } else return v;
+    }
+  }
+  function expr(): number {
+    let v = term();
+    for (;;) {
+      if (eat("+")) v += term();
+      else if (eat("-")) v -= term();
+      else return v;
+    }
+  }
+  const result = expr();
+  if (pos !== src.length) throw new Error(`trailing input at ${pos}: "${src.slice(pos, pos + 6)}"`);
+  if (!Number.isFinite(result)) throw new Error("result is not finite");
+  return result;
+}
 
-/** Execute one parsed tool call. Unknown tools are reported, never executed blindly. */
+async function runCalc(params: Record<string, string>): Promise<string> {
+  const expression =
+    params.expression ?? params.expr ?? params.q ?? params.input ?? params.text ?? "";
+  if (!expression) return "calc error: no expression given.";
+  try {
+    const value = runCalcExpression(expression);
+    const pretty = Number.isInteger(value) ? String(value) : String(parseFloat(value.toPrecision(12)));
+    return `calc(${expression.trim()}) = ${pretty}`;
+  } catch (e) {
+    return `calc error: ${
+      e instanceof Error ? e.message : "invalid expression"
+    } — supported: numbers, + - * / % ^, parens, pi/e, sqrt/min/max/…`;
+  }
+}
+
+/* ---------------- vision_analyze (Hermes brain tool) ---------------- */
+
+async function runVisionAnalyze(params: Record<string, string>): Promise<string> {
+  const url = params.url ?? params.image ?? params.image_url ?? params.path ?? "";
+  const question = params.question ?? params.prompt ?? "Describe this image in detail.";
+  if (!url || !/^https?:\/\//i.test(url)) {
+    return "vision_analyze error: no image url given. Ask the user to send the photo here (or provide a public https image url).";
+  }
+  const res = await timedFetch(url, { headers: { "User-Agent": UA } }, 20_000);
+  if (!res.ok) return `vision_analyze error: could not download image (HTTP ${res.status}).`;
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (!buf.length) return "vision_analyze error: empty image file.";
+  const ZAI = (await import("z-ai-web-dev-sdk")).default;
+  const zai = await ZAI.create();
+  const answer = await zai.chat.completions.create({
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image_url",
+            image_url: { url: `data:image/png;base64,${Buffer.from(buf).toString("base64")}` },
+          },
+          { type: "text", text: question.slice(0, 500) },
+        ],
+      } as unknown as { role: "user"; content: string },
+    ],
+  });
+  const anyRes = answer as { choices?: { message?: { content?: string } }[]; content?: string };
+  const text = anyRes?.choices?.[0]?.message?.content ?? anyRes?.content ?? "";
+  if (!text) return "vision_analyze error: the vision model returned nothing.";
+  return `vision_analyze(${url.slice(0, 80)}):\n${clip(text)}`;
+}
+
+/* ---------------- todo_list (Hermes brain tool, memory-backed) ---------------- */
+
+async function runTodoList(params: Record<string, string>, ctx?: ToolContext): Promise<string> {
+  if (!ctx?.agentKey) {
+    return "todo_list error: todos are agent-scoped and only available in gateway (Telegram) sessions.";
+  }
+  const { getAgent, rememberFact, searchMemory } = await import("./agent-registry");
+  const agent = getAgent(ctx.agentKey);
+  if (!agent) return "todo_list error: agent session not found.";
+  const action = (params.action ?? "list").toLowerCase();
+  const item = params.text ?? params.item ?? params.task ?? "";
+  if ((action === "add" || action === "append") && item) {
+    rememberFact(agent, `[todo] ${item}`);
+    return `todo_list ok — added: "${item.slice(0, 120)}".`;
+  }
+  const todos = searchMemory(agent, "[todo]");
+  if (!todos.length) return "todo_list: no open todos. Add one with action=add, text=…";
+  return `todo_list (${todos.length} open):\n${todos.map((m) => `- ${m.text}`).join("\n")}`;
+}
+
+/* ---------------- exec (Moltis brain tool) — safe refusal ---------------- */
+
+function runExecNote(params: Record<string, string>): string {
+  const cmd = params.command ?? params.cmd ?? "";
+  return [
+    "exec error: Deep-init runs as a serverless cloud agent — there is no shell here and commands cannot be executed.",
+    cmd ? `Refused command: "${cmd.slice(0, 120)}".` : "",
+    "Tell the user plainly that shell execution is not available in this deployment, and offer the closest safe alternative (web_fetch to read a resource, calc for math, remember/recall for notes).",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/* ---------------- memory_forget (Moltis brain tool) ---------------- */
+
+async function runForget(params: Record<string, string>, ctx?: ToolContext): Promise<string> {
+  if (!ctx?.agentKey) return "forget error: memory is only available in gateway (Telegram) sessions.";
+  const { getAgent, forgetFact } = await import("./agent-registry");
+  const agent = getAgent(ctx.agentKey);
+  if (!agent) return "forget error: agent session not found.";
+  const query = params.query ?? params.text ?? params.fact ?? "";
+  if (!query) return "forget error: say what to forget (query or exact text).";
+  const removed = forgetFact(agent, query);
+  if (!removed.length) return `forget: nothing in memory matches "${query.slice(0, 80)}".`;
+  return `forget ok — removed ${removed.length} item(s):\n${removed.map((m) => `- ${m.text}`).join("\n")}`;
+}
+
+const SEARCH_ALIASES = /search|find|look_?up|query/i;
+const FETCH_ALIASES = /fetch|read|open|browse|get_page|page_reader|curl|extract/i;
+// brain-vocabulary routing (Hermes + Moltis tool names → Deep-init executors)
+const CALC_ALIASES = /^calc$|^calc_|calculator|arithmetic|^math$/i;
+const EXEC_ALIASES = /^exec$|^shell$|^bash$|^terminal$|^run_?command$/i;
+const VISION_ALIASES = /^vision_?analyze|^vision$|analyze_?image|describe_?image|^image_?analyze$/i;
+const TODO_ALIASES = /todo/i;
+const FORGET_ALIASES = /forget|memory_?(delete|remove|drop)/i;
+const MOLTIS_REMEMBER_ALIASES = /memory_?(save|store|write)/i;
+const MOLTIS_RECALL_ALIASES = /memory_?(recall|search|get|load)/i;
+const CRON_ALIASES = /^cron$|^cronjob|cronjob_?manage|set_?timer|schedule_?me/i;
+
+/**
+ * Execute one parsed tool call. Unknown tools are reported, never executed
+ * blindly. The alias table covers Deep-init's own tools PLUS the tool vocab
+ * of the enabled brains (Hermes: web_extract / image_generate / text_to_speech
+ * / vision_analyze / todo_list / cronjob_manage / memory; Moltis: calc / exec /
+ * memory_save / memory_forget / memory_recall / cron) — so whichever brain is
+ * toggled on, its native tool names route to real executors.
+ */
 export async function executeToolCall(call: ToolCall, ctx?: ToolContext): Promise<string> {
   try {
     const name = call.name.toLowerCase();
+    if (CALC_ALIASES.test(name)) {
+      return await runCalc(call.params);
+    }
+    if (EXEC_ALIASES.test(name)) {
+      return runExecNote(call.params);
+    }
+    if (VISION_ALIASES.test(name)) {
+      return await runVisionAnalyze(call.params);
+    }
+    if (FORGET_ALIASES.test(name)) {
+      return await runForget(call.params, ctx);
+    }
+    if (TODO_ALIASES.test(name)) {
+      return await runTodoList(call.params, ctx);
+    }
     if (/image_?gen|generate_?image|draw|create_?image|render_?image/.test(name)) {
       return await runImageGen(call.params);
     }
@@ -521,13 +826,13 @@ export async function executeToolCall(call: ToolCall, ctx?: ToolContext): Promis
     if (/^tts$|text.?to.?speech|voice_?(gen|message|note)|speak/.test(name)) {
       return await runTts(call.params);
     }
-    if (/remember|memory_?save|store_?fact/.test(name)) {
+    if (/remember|store_?fact/.test(name) || MOLTIS_REMEMBER_ALIASES.test(name)) {
       return await runRemember(call.params, ctx);
     }
-    if (/recall|memory_?(search|get)|remembered/.test(name)) {
+    if (/recall|remembered/.test(name) || MOLTIS_RECALL_ALIASES.test(name)) {
       return await runRecall(call.params, ctx);
     }
-    if (/remind|schedule_?(me|reminder)?|alarm|wake_?me/.test(name) && !/schedule_?send/.test(name)) {
+    if ((/remind|alarm|wake_?me/.test(name) || CRON_ALIASES.test(name)) && !/schedule_?send/.test(name)) {
       return await runRemind(call.params, ctx);
     }
     if (SEARCH_ALIASES.test(name) && !FETCH_ALIASES.test(name.replace(/search/gi, ""))) {
@@ -568,9 +873,13 @@ export const TOOLS_MANUAL = [
   "- image_search    params: query, count — find real images on the web.",
   "- image_gen       params: prompt, size? — generate an image (delivered as media attachment).",
   "- tts             params: text, voice? — generate a voice note (delivered as audio).",
+  "- calc            params: expression — exact arithmetic (e.g. (17.5/100)*2384*12).",
+  "- vision_analyze  params: url, question? — analyze an image by url.",
   "- remember        params: text — store a durable fact about the user in agent memory.",
   "- recall          params: query? — search agent memory.",
+  "- forget          params: query — remove matching items from agent memory.",
   "- remind          params: when, text — schedule a proactive message (when = ISO 8601 or 'in 30 minutes').",
+  "Brain tool names are auto-routed (web_extract, image_generate, text_to_speech, memory_save, memory_forget, memory_recall, cron, todo_list, exec) — use your native names freely.",
   "Call tools one at a time. If a tool fails, tell the user plainly instead of retrying forever.",
 ].join("\n");
 

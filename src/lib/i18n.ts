@@ -123,6 +123,34 @@ const en: Record<string, string> = {
   "presets.needPair": "Pair a Telegram channel first so the preset reaches your bot.",
   "presets.synced": "Preset synced to your agent",
   "presets.syncFail": "Activated locally, but the gateway sync failed: {error}",
+  /* cognition (agent brains) */
+  "tab.cognition": "cognition",
+  "brains.kicker": "/// agent brains",
+  "brains.title": "Cognition packs",
+  "brains.sub":
+    "Port the minds of the two leading open-source agent projects onto your Init. Enable one, both, or neither — the brain's prompt layer, tone and tool dialect apply everywhere: web console and Telegram.",
+  "brains.activeSig": "active: {sig}",
+  "brains.noneActive": "no brain packs — classic Init",
+  "brains.needPair": "pair a Telegram bot to sync toggles to the gateway",
+  "brains.enabled": "{name} enabled",
+  "brains.disabled": "{name} disabled",
+  "brains.syncFail": "Toggled locally, but the gateway sync failed: {error}",
+  "brains.turnOn": "Enable brain",
+  "brains.turnOff": "Disable brain",
+  "brains.toolsAdvertised": "tool vocabulary",
+  "brains.howTitle": "How brains stack",
+  "brains.howBody":
+    "Each brain is a ported cognition layer: Hermes brings tool-use enforcement, finish-the-job discipline and parallel calls; Moltis brings its SOUL.md personality and the fenced-JSON tool protocol. Your provider chain stays exactly as configured — brains change how Init thinks, not which models answer.",
+  "brains.howBoth":
+    "Both ON = hybrid cognition: Hermes discipline + Moltis soul in one agent. Toggle off any time — no re-pairing needed.",
+  "brain.hermes.name": "Hermes Agent brain",
+  "brain.hermes.tag": "Nous Research operator culture: direct, tool-first, never fabricates results.",
+  "brain.moltis.name": "Moltis brain",
+  "brain.moltis.tag": "Soul-driven personality with opinions, plus the calc engine and memory routing.",
+
+
+
+
   "preset.chief.name": "Chief of Staff",
   "preset.chief.tag": "Schedules, briefings, follow-ups \u2014 your right hand.",
   "preset.research.name": "Research Analyst",
@@ -304,6 +332,31 @@ const ru: Record<string, string> = {
   "presets.needPair": "Сначала подключите Telegram-канал, чтобы пресет дошёл до бота.",
   "presets.synced": "Пресет синхронизирован с агентом",
   "presets.syncFail": "Включён локально, но синхронизация со шлюзом не удалась: {error}",
+  /* cognition (agent brains) */
+  "tab.cognition": "когниция",
+  "brains.kicker": "/// мозги агента",
+  "brains.title": "Когнитивные пакеты",
+  "brains.sub":
+    "Перенесите мышление двух ведущих open-source агентских проектов в своего Init. Включите один, оба или ни одного — слой промпта, тон и диалект инструментов мозга действуют везде: в веб-консоли и в Telegram.",
+  "brains.activeSig": "активны: {sig}",
+  "brains.noneActive": "нет пакетов — классический Init",
+  "brains.needPair": "подключите Telegram-бота, чтобы синхронизировать тумблеры со шлюзом",
+  "brains.enabled": "{name} включён",
+  "brains.disabled": "{name} выключен",
+  "brains.syncFail": "Переключено локально, но синхронизация со шлюзом не удалась: {error}",
+  "brains.turnOn": "Включить мозг",
+  "brains.turnOff": "Выключить мозг",
+  "brains.toolsAdvertised": "словарь инструментов",
+  "brains.howTitle": "Как складываются мозги",
+  "brains.howBody":
+    "Каждый мозг — это перенесённый когнитивный слой: Hermes даёт принуждение к инструментам, дисциплину доводить дело до конца и параллельные вызовы; Moltis — личность из SOUL.md и JSON-протокол tool_call. Цепочка провайдеров остаётся как настроена — мозги меняют то, как Init думает, а не какие модели отвечают.",
+  "brains.howBoth":
+    "Оба включены = гибрид: дисциплина Hermes + душа Moltis в одном агенте. Отключается в любой момент без переподключения.",
+  "brain.hermes.name": "Мозг Hermes Agent",
+  "brain.hermes.tag": "Операторская культура Nous Research: прямой, инструмент-первым, не выдумывает результаты.",
+  "brain.moltis.name": "Мозг Moltis",
+  "brain.moltis.tag": "Личность с мнением из SOUL.md, плюс движок calc и маршрутизация памяти.",
+
   "preset.chief.name": "Начальник штаба",
   "preset.chief.tag": "Расписания, брифинги, напоминания — правая рука.",
   "preset.research.name": "Аналитик-исследователь",
@@ -484,6 +537,31 @@ const he: Record<string, string> = {
   "presets.needPair": "קחרו קודם ערוץ טלגרם כדי שהפריסט יגיע לבוט.",
   "presets.synced": "הפריסט סונכרן עם הסוכן",
   "presets.syncFail": "הופעל מקומית, אבל הסנכרון עם השער נכשל: {error}",
+  /* cognition (agent brains) */
+  "tab.cognition": "קוגניציה",
+  "brains.kicker": "/// מוחות הסוכן",
+  "brains.title": "חבילות קוגניציה",
+  "brains.sub":
+    "שתלו את המוח של שני פרויקטי הסוכנים הפתוחים המובילים לתוך ה-Init שלכם. הפעילו אחד, את שניהם או אף אחד — שכבת הפרומפט, הטון ודיאלקט הכלים של המוח חלים בכל מקום: קונסולת הווב וגם טלגרם.",
+  "brains.activeSig": "פעילים: {sig}",
+  "brains.noneActive": "אין חבילות מוח — Init קלאסי",
+  "brains.needPair": "חברו בוט טלגרם כדי לסנכרן את המתגים עם השער",
+  "brains.enabled": "{name} הופעל",
+  "brains.disabled": "{name} כובה",
+  "brains.syncFail": "שונה מקומית, אבל הסנכרון עם השער נכשל: {error}",
+  "brains.turnOn": "הפעל מוח",
+  "brains.turnOff": "כבה מוח",
+  "brains.toolsAdvertised": "אוצר כלים",
+  "brains.howTitle": "איך המוחות נערמים",
+  "brains.howBody":
+    "כל מוח הוא שכבת קוגניציה שהועתקה: Hermes מביא אכיפת שימוש בכלים, משמעת של סיום עבודה וקריאות מקבילות; Moltis מביא אישיות מ-SOUL.md ופרוטוקול tool_call ב-JSON. שרשרת הספקים נשארת כפי שהוגדרה — המוחות משנים איך Init חושב, לא אילו מודלים עונים.",
+  "brains.howBoth":
+    "שניהם דולקים = קוגניציה היברידית: משמעת Hermes + נשמה Moltis בסוכן אחד. אפשר לכבות בכל רגע בלי חיבור מחדש.",
+  "brain.hermes.name": "מוח Hermes Agent",
+  "brain.hermes.tag": "תרבות אופרטור של Nous Research: ישיר, כלים קודם, לא ממציא תוצאות.",
+  "brain.moltis.name": "מוח Moltis",
+  "brain.moltis.tag": "אישיות עם דעות מ-SOUL.md, בתוספת מנוע calc וניתוב זיכרון.",
+
   "preset.chief.name": "ראש מטה",
   "preset.chief.tag": "לוחות זמנים, תדרוכים, מעקב — היד הימנית שלכם.",
   "preset.research.name": "אנליסט מחקר",

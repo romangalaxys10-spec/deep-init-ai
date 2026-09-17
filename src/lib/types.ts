@@ -197,6 +197,8 @@ export interface ChatRequest {
     compat: ProviderCompat;
   }[];
   allowDemoBrain?: boolean;
+  /** enabled cognition packs (Hermes / Moltis brains) */
+  brains?: { hermes?: boolean; moltis?: boolean };
 }
 
 export interface ChatResponse {

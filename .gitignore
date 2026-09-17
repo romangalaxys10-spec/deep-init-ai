@@ -61,3 +61,9 @@ server.log
 # local artifacts
 download/
 tool-results/
+
+# local research clones (do not ship)
+/research
+
+# staging files
+/scripts/i18n-cognition-blocks.json

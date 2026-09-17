@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 import type { ChatRequest } from "./types";
+import type { BrainConfig } from "./brains";
 
 /* ============================================================
  * Server-side agent gateway registry
@@ -63,6 +64,8 @@ export interface RegisteredAgent {
   reminders?: Reminder[];
   /** activated agent preset id (presets library) */
   presetId?: string;
+  /** enabled cognition packs (Hermes / Moltis brains) */
+  brains?: BrainConfig;
 }
 
 export interface Reminder {
@@ -172,6 +175,7 @@ function hydrate(raw: Record<string, SerializedAgent>): Map<string, RegisteredAg
       ...rest,
       memory: Array.isArray(rest.memory) ? rest.memory : [],
       reminders: Array.isArray(rest.reminders) ? rest.reminders : [],
+      brains: rest.brains ?? { hermes: false, moltis: false },
       chats: new Map(chats.map((c) => [c.chatId, c])),
     });
   }
@@ -308,6 +312,7 @@ export function registerAgent(input: RegisterInput): RegisteredAgent {
     memory: prev?.memory ?? [],
     reminders: prev?.reminders ?? [],
     presetId: prev?.presetId,
+    brains: prev?.brains,
   };
   mem.set(input.key, agent);
   return agent;
@@ -383,6 +388,18 @@ export function searchMemory(agent: RegisteredAgent, query?: string): { at: numb
     .filter((m) => tokens.some((tk) => m.text.toLowerCase().includes(tk)))
     .slice(-8)
     .reverse();
+}
+
+/** Remove memory entries matching a query (Moltis brain: memory_forget). */
+export function forgetFact(agent: RegisteredAgent, query: string): { at: number; text: string }[] {
+  const mems = agent.memory ?? [];
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const kept = mems.filter((m) => !m.text.toLowerCase().includes(q));
+  const removed = mems.filter((m) => m.text.toLowerCase().includes(q));
+  agent.memory = kept;
+  agent.lastSeen = Date.now();
+  return removed;
 }
 
 /* ---------------- reminders (remind tool + cron flush) ---------------- */

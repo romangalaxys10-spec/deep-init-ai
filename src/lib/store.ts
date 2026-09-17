@@ -20,6 +20,7 @@ import type {
 import type { Lang } from "./i18n";
 import type { AgentPreset } from "./presets";
 import { getPreset, presetPromptBlock } from "./presets";
+import { DEFAULT_BRAIN_CONFIG, normalizeBrainConfig, type BrainConfig, type BrainId } from "./brains";
 import { genPairingToken, genPortalToken, slugifyUser } from "./tokens";
 
 export const BUILTIN_TOOLS: AgentTool[] = [
@@ -95,6 +96,8 @@ interface DeepInitState {
   uiLang: Lang;
   /** activated agent preset (presets library), null = no preset */
   activePreset: string | null;
+  /** enabled cognition packs (Hermes / Moltis brains) */
+  brains: BrainConfig;
 
   setView: (v: View) => void;
   setWizardStep: (s: number) => void;
@@ -132,6 +135,9 @@ interface DeepInitState {
   /** activate/deactivate a preset: updates local state, the merged system
    *  prompt and the server-side gateway agent (best-effort API push) */
   activatePreset: (id: string | null) => Promise<{ ok: boolean; error?: string }>;
+  /** toggle a cognition pack (Hermes / Moltis brain): updates local state and
+   *  pushes the config to the server-side gateway agent (best-effort) */
+  setBrain: (id: BrainId, on: boolean) => Promise<{ ok: boolean; error?: string }>;
   /** generates portal credentials + owner pairing token (wizard step 1) */
   ensureCredentials: () => void;
   resetAll: () => void;
@@ -182,6 +188,7 @@ export const useDeepInit = create<DeepInitState>()(
       whitelist: [],
       uiLang: "en",
       activePreset: null,
+      brains: { hermes: false, moltis: false },
 
       setHydrated: () => set({ hydrated: true }),
       setView: (view) => set({ view }),
@@ -298,6 +305,30 @@ export const useDeepInit = create<DeepInitState>()(
         }
       },
 
+      setBrain: async (id, on) => {
+        const current = normalizeBrainConfig(get().brains);
+        const next = { ...current, [id]: on };
+        set({ brains: next });
+        get().logActivity({
+          kind: "system",
+          title: on ? `Brain enabled: ${id}` : `Brain disabled: ${id}`,
+        });
+        const ownerToken = get().profile.pairingToken;
+        if (!ownerToken) return { ok: true }; // local-only until paired
+        try {
+          const res = await fetch("/api/agent/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ownerToken, brains: next }),
+          });
+          const data = (await res.json()) as { ok?: boolean; error?: string };
+          if (!res.ok || !data.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      },
+
       ensureCredentials: () =>
         set((s) => {
           const patch: Partial<UserProfile> = {};
@@ -351,6 +382,7 @@ export const useDeepInit = create<DeepInitState>()(
         whitelist: s.whitelist,
         uiLang: s.uiLang,
         activePreset: s.activePreset,
+        brains: s.brains,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();

@@ -10,6 +10,7 @@ import { AlertTriangle, CornerDownLeft, Loader2, Send, TerminalSquare, Volume2 }
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RichText } from "./rich-text";
 import { getPreset } from "@/lib/presets";
+import { BRAIN_STARTERS, enabledBrains } from "@/lib/brains";
 import { MonoLabel, StatusDot } from "./ui-bits";
 import { MicButton, VoiceControls, useSpeak } from "./voice";
 
@@ -18,6 +19,11 @@ const BASE_SUGGESTIONS = ["cs.sug1", "cs.sug2", "cs.sug3", "cs.sug4"];
 export function AgentConsole() {
   const t = useT();
   const activePreset = useDeepInit((s) => s.activePreset);
+  const brainCfg = useDeepInit((s) => s.brains);
+  // brains without an active preset lend their starters to the console
+  const brainStarters = activePreset
+    ? []
+    : enabledBrains(brainCfg).flatMap((b) => BRAIN_STARTERS[b.id]).slice(0, 4);
   const messages = useDeepInit((s) => s.messages);
   const addMessage = useDeepInit((s) => s.addMessage);
   const updateMessage = useDeepInit((s) => s.updateMessage);
@@ -241,7 +247,9 @@ export function AgentConsole() {
             <div className="flex flex-wrap justify-center gap-2">
               {(activePreset
                 ? (getPreset(activePreset)?.starters ?? BASE_SUGGESTIONS.map((k) => t(k)))
-                : BASE_SUGGESTIONS.map((k) => t(k))
+                : brainStarters.length
+                  ? brainStarters
+                  : BASE_SUGGESTIONS.map((k) => t(k))
               ).map((s) => (
                 <button
                   key={s}

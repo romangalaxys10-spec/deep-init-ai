@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
           providers,
           messages,
           allowDemoBrain: body.allowDemoBrain,
+          brains: body.brains,
           onEvent: (ev) => {
             if (ev.type === "provider_start") {
               send({ type: "provider_start", label: ev.label, model: ev.model });
@@ -68,7 +69,7 @@ export async function POST(req: NextRequest) {
   }
 
   /* ---- classic JSON mode ---- */
-  const result = await runAgentChain({ providers, messages, allowDemoBrain: body.allowDemoBrain });
+  const result = await runAgentChain({ providers, messages, allowDemoBrain: body.allowDemoBrain, brains: body.brains });
 
   if (result.ok && result.content) {
     return NextResponse.json({

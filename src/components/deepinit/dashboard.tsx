@@ -29,11 +29,13 @@ import {
   Sparkles,
   TerminalSquare,
   Wrench,
+  Brain,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { CopyField, Logo, MonoLabel, Panel, StatusDot } from "./ui-bits";
 import { AgentConsole } from "./agent-console";
 import { BrainsPanel, ToolsPanel } from "./dashboard-panels";
+import { CognitionPanel } from "./cognition-panel";
 import { InstancesPanel } from "./instances-panel";
 import { GatewayPanel, WhitelistPanel } from "./channels-ops";
 import { PresetsPanel } from "./presets-panel";
@@ -45,6 +47,7 @@ type Tab =
   | "console"
   | "channels"
   | "presets"
+  | "cognition"
   | "brains"
   | "tools"
   | "instances"
@@ -55,6 +58,7 @@ const TABS: { id: Tab; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "console", icon: TerminalSquare },
   { id: "channels", icon: MessageCircle },
   { id: "presets", icon: Sparkles },
+  { id: "cognition", icon: Brain },
   { id: "brains", icon: Cable },
   { id: "tools", icon: Wrench },
   { id: "instances", icon: MonitorSmartphone },
@@ -314,6 +318,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         {tab === "console" && <AgentConsole />}
 
         {tab === "presets" && <div className="di-fade-up"><PresetsPanel /></div>}
+        {tab === "cognition" && <div className="di-fade-up"><CognitionPanel /></div>}
         {tab === "channels" && (
           <ChannelsTab />
         )}

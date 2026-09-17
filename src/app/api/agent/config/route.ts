@@ -6,16 +6,23 @@ import {
   touchAgent,
 } from "@/lib/agent-registry";
 import { getPreset } from "@/lib/presets";
+import { normalizeBrainConfig } from "@/lib/brains";
 
 export const maxDuration = 30;
 
 /**
  * Lightweight agent config updates from the portal — preset activation,
  * system prompt tweaks — without re-pairing the bot.
- * Body: { ownerToken, presetId?: string | null, systemPrompt?: string }
+ * Body: { ownerToken, presetId?: string | null, systemPrompt?: string,
+ *         brains?: { hermes?: boolean, moltis?: boolean } }
  */
 export async function POST(req: NextRequest) {
-  let body: { ownerToken?: string; presetId?: string | null; systemPrompt?: string };
+  let body: {
+    ownerToken?: string;
+    presetId?: string | null;
+    systemPrompt?: string;
+    brains?: { hermes?: boolean; moltis?: boolean } | null;
+  };
   try {
     body = await req.json();
   } catch {
@@ -46,6 +53,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  if (body.brains !== undefined) {
+    // toggle packs: null clears both; partial objects only flip given keys
+    agent.brains =
+      body.brains === null
+        ? { hermes: false, moltis: false }
+        : normalizeBrainConfig({ ...normalizeBrainConfig(agent.brains), ...body.brains });
+  }
+
   if (typeof body.systemPrompt === "string" && body.systemPrompt.trim().length > 20) {
     agent.systemPrompt = body.systemPrompt.trim().slice(0, 8000);
   }
@@ -56,6 +71,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     presetId: agent.presetId ?? null,
+    brains: normalizeBrainConfig(agent.brains),
     systemPrompt: agent.systemPrompt,
     agentName: agent.agentName,
   });

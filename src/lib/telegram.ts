@@ -15,6 +15,7 @@ import {
   type TokenMatch,
 } from "./agent-registry";
 import { runAgentChainStreaming } from "./brain";
+import { brainSignature } from "./brains";
 import type { GatewayChat } from "./types";
 import {
   extractFileAttachments,
@@ -378,6 +379,7 @@ async function streamReplyToChat(
     providers: agent.providers,
     messages,
     allowDemoBrain: agent.allowDemoBrain,
+    brains: agent.brains,
     toolCtx: toolCtx || { agentKey: agent.key, chatId },
     onEvent: (ev) => {
       if (ev.type !== "delta") return;
@@ -520,9 +522,12 @@ async function lookupWithRetry(botToken: string, token: string): Promise<TokenMa
 
 function contextLine(agent: RegisteredAgent, mode: string, userName: string): string {
   const now = new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  const sig = brainSignature(agent.brains);
   const base = `\n\n[Context: current time is ${now}. ${
     agent.presetId ? `Active preset: ${agent.presetId}. ` : ""
-  }${(agent.memory?.length ?? 0) > 0 ? `You have ${agent.memory?.length} long-term memories (use recall).` : ""}]`;
+  }${sig ? `Active brains: ${sig}. ` : ""}${
+    (agent.memory?.length ?? 0) > 0 ? `You have ${agent.memory?.length} long-term memories (use recall).` : ""
+  }]`;
   if (mode === "owner") {
     return `\n\n[Context: you are chatting with ${agent.ownerName} — your owner and operator, via Telegram. This is the main shared thread.]${base}`;
   }
