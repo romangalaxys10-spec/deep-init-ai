@@ -1,4 +1,5 @@
 import type { ChatRequest, FallbackStep } from "./types";
+import { getZAI } from "./zai";
 import { brainPromptBlock, type BrainConfig } from "./brains";
 import {
   AGENT_GUARDRAILS,
@@ -167,8 +168,7 @@ async function callAnthropic(
 async function callDemoBrain(messages: Msg[]): Promise<CallResult> {
   const started = Date.now();
   try {
-    const ZAI = (await import("z-ai-web-dev-sdk")).default;
-    const zai = await ZAI.create();
+    const zai = await getZAI();
     const completion = await zai.chat.completions.create({
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
     });

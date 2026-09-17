@@ -21,6 +21,8 @@
  *     keep internal context internal.
  * ============================================================ */
 
+import { getZAI } from "./zai";
+
 export interface ToolCall {
   name: string;
   params: Record<string, string>;
@@ -309,8 +311,7 @@ interface SearchHit {
 
 async function sdkSearch(query: string): Promise<SearchHit[] | null> {
   try {
-    const ZAI = (await import("z-ai-web-dev-sdk")).default;
-    const zai = await ZAI.create();
+    const zai = await getZAI();
     const r = await zai.functions.invoke("web_search", { query, num: 5 });
     return (r as SearchHit[]).map((i) => ({
       name: i.name,
@@ -381,8 +382,7 @@ async function runWebFetch(params: Record<string, string>): Promise<string> {
   }
   // preferred: managed page reader (JS-aware, cleaner text)
   try {
-    const ZAI = (await import("z-ai-web-dev-sdk")).default;
-    const zai = await ZAI.create();
+    const zai = await getZAI();
     const r = await zai.functions.invoke("page_reader", { url });
     const d = (r as { code?: number; data?: { html?: string; title?: string } }).data;
     if (d?.html) {
@@ -432,8 +432,7 @@ async function runImageSearch(params: Record<string, string>): Promise<string> {
   const query = params.query ?? params.q ?? params.keywords ?? params.search ?? "";
   if (!query) return "image_search error: no query given.";
   const count = Math.min(6, Math.max(1, parseInt(params.count || "5", 10) || 5));
-  const ZAI = (await import("z-ai-web-dev-sdk")).default;
-  const zai = await ZAI.create();
+  const zai = await getZAI();
   const r = (await zai.images.search.create({ query, count })) as {
     results?: { original_url?: string; caption?: string; source?: string }[];
   };
@@ -452,8 +451,7 @@ async function runImageGen(params: Record<string, string>): Promise<string> {
   const prompt = params.prompt ?? params.description ?? params.text ?? "";
   if (!prompt) return "image_gen error: no prompt given.";
   const size = (params.size || "1024x1024") as "1024x1024";
-  const ZAI = (await import("z-ai-web-dev-sdk")).default;
-  const zai = await ZAI.create();
+  const zai = await getZAI();
   const r = (await zai.images.generations.create({ prompt, size })) as {
     data?: { base64?: string }[];
   };
@@ -483,8 +481,7 @@ async function runTts(params: Record<string, string>): Promise<string> {
   const text = params.text ?? params.input ?? params.message ?? "";
   if (!text) return "tts error: no text given.";
   const voice = params.voice || undefined;
-  const ZAI = (await import("z-ai-web-dev-sdk")).default;
-  const zai = await ZAI.create();
+  const zai = await getZAI();
   const r = (await zai.audio.tts.create({ input: text.slice(0, 4000), voice, response_format: "mp3" })) as
     | { audio?: string; base64?: string; data?: { base64?: string }[] }
     | ArrayBuffer;
@@ -710,8 +707,7 @@ async function runVisionAnalyze(params: Record<string, string>): Promise<string>
   if (!res.ok) return `vision_analyze error: could not download image (HTTP ${res.status}).`;
   const buf = new Uint8Array(await res.arrayBuffer());
   if (!buf.length) return "vision_analyze error: empty image file.";
-  const ZAI = (await import("z-ai-web-dev-sdk")).default;
-  const zai = await ZAI.create();
+  const zai = await getZAI();
   const answer = await zai.chat.completions.create({
     messages: [
       {

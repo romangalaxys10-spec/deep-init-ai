@@ -1,3 +1,4 @@
+import { getZAI } from "./zai";
 import {
   agentsForBot,
   bindChat,
@@ -554,8 +555,7 @@ async function transcribeTelegramVoice(
   const bytes = await tgGetFileBytes(botToken, fileId);
   if (!bytes) return { text: "", note: "I couldn't download that voice note — please try again or type it." };
   try {
-    const ZAI = (await import("z-ai-web-dev-sdk")).default;
-    const zai = await ZAI.create();
+    const zai = await getZAI();
     const r = (await zai.audio.asr.create({ file_base64: bytes.toString("base64") })) as
       | { text?: string; result?: { text?: string } }
       | string;
@@ -591,8 +591,7 @@ async function describeTelegramPhoto(
   const caption = msg.caption?.trim() || "Describe this image for me in detail.";
   // 1) built-in vision (works where .z-ai-config exists)
   try {
-    const ZAI = (await import("z-ai-web-dev-sdk")).default;
-    const zai = await ZAI.create();
+    const zai = await getZAI();
     const visionBody = {
       messages: [
         {
