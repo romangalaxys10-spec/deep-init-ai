@@ -1,0 +1,384 @@
+"use client";
+
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { useDeepInit } from "@/lib/store";
+import type { ActivityEvent } from "@/lib/types";
+import {
+  Activity,
+  Cable,
+  Clock,
+  HeartPulse,
+  MessageCircle,
+  MessagesSquare,
+  RotateCcw,
+  TerminalSquare,
+  Wrench,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Logo, MonoLabel, Panel, StatusDot } from "./ui-bits";
+import { AgentConsole } from "./agent-console";
+import { BrainsPanel, ToolsPanel } from "./dashboard-panels";
+import { TelegramCard, WhatsAppCard } from "./wizard";
+
+type Tab = "overview" | "console" | "channels" | "brains" | "tools" | "activity";
+
+const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { id: "overview", label: "overview", icon: HeartPulse },
+  { id: "console", label: "console", icon: TerminalSquare },
+  { id: "channels", label: "channels", icon: MessageCircle },
+  { id: "brains", label: "brains", icon: Cable },
+  { id: "tools", label: "tools · mcp", icon: Wrench },
+  { id: "activity", label: "activity", icon: Activity },
+];
+
+const LOOP_TASKS = [
+  "Heartbeat OK — all systems nominal",
+  "Scanned connected inboxes — nothing urgent",
+  "Checked calendar for upcoming conflicts",
+  "Consolidated memory: new facts indexed",
+  "Re-ranked task queue by priority",
+  "Polled registered endpoints for changes",
+  "Pruned stale skills from the registry",
+  "Prepared proactive morning briefing",
+];
+
+function fmtUptime(fromMs: number, now: number): string {
+  const s = Math.max(0, Math.floor((now - fromMs) / 1000));
+  const d = Math.floor(s / 86400);
+  const h = String(Math.floor((s % 86400) / 3600)).padStart(2, "0");
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const sec = String(s % 60).padStart(2, "0");
+  return d > 0 ? `${d}d ${h}:${m}:${sec}` : `${h}:${m}:${sec}`;
+}
+
+function timeAgo(iso: string): string {
+  const s = Math.max(1, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+export function Dashboard() {
+  const profile = useDeepInit((s) => s.profile);
+  const channels = useDeepInit((s) => s.channels);
+  const providers = useDeepInit((s) => s.providers);
+  const tools = useDeepInit((s) => s.tools);
+  const messages = useDeepInit((s) => s.messages);
+  const activity = useDeepInit((s) => s.activity);
+  const questionnaire = useDeepInit((s) => s.questionnaire);
+  const activatedAt = useDeepInit((s) => s.activatedAt);
+  const logActivity = useDeepInit((s) => s.logActivity);
+  const addChannel = useDeepInit((s) => s.addChannel);
+  const removeChannel = useDeepInit((s) => s.removeChannel);
+  const resetAll = useDeepInit((s) => s.resetAll);
+  const setView = useDeepInit((s) => s.setView);
+
+  const [tab, setTab] = useState<Tab>("overview");
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const iv = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // autonomous loop — periodic heartbeat + task ticks
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const roll = Math.random();
+      if (roll < 0.45) {
+        logActivity({ kind: "heartbeat", title: `Heartbeat OK — ${profile.agentName} is on watch` });
+      } else {
+        const t = LOOP_TASKS[Math.floor(Math.random() * LOOP_TASKS.length)];
+        logActivity({ kind: "task", title: t });
+      }
+    }, 16_000);
+    return () => clearInterval(iv);
+  }, [logActivity, profile.agentName]);
+
+  const enabledProviders = useMemo(
+    () => [...providers].filter((p) => p.enabled).sort((a, b) => a.priority - b.priority),
+    [providers]
+  );
+  const connected = channels.filter((c) => c.status === "connected");
+  const enabledTools = tools.filter((t) => t.enabled);
+  const tasksHandled = Math.floor(messages.length / 2);
+
+  const uptime = activatedAt ? fmtUptime(new Date(activatedAt).getTime(), now) : "—";
+  const cycles = activatedAt ? Math.floor((now - new Date(activatedAt).getTime()) / 16_000) : 0;
+
+  const loopFeed = useMemo(
+    () => activity.filter((e) => e.kind === "heartbeat" || e.kind === "task").slice(0, 9),
+    [activity]
+  );
+
+  return (
+    <div className="di-grid-bg flex min-h-screen flex-col">
+      {/* header */}
+      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <TerminalSquare className="h-5 w-5 shrink-0 text-primary" />
+            <Logo className="shrink-0 text-base" />
+            <span className="hidden h-4 w-px bg-border sm:block" />
+            <span className="hidden truncate font-mono text-sm text-primary sm:block">{profile.agentName}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="hidden items-center gap-2 font-mono text-[11px] text-muted-foreground md:inline-flex">
+              <StatusDot ok /> active · up <span className="text-foreground">{uptime}</span>
+            </span>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" size="sm" className="font-mono text-xs">
+                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reset
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Factory reset the agent?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Wipes the operator profile, channels, provider chain, tools and memory on this device. The agent will need to be initialized again.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Keep it running</AlertDialogCancel>
+                  <AlertDialogAction onClick={resetAll} className="font-mono">
+                    Wipe & restart
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        </div>
+
+        {/* tabs */}
+        <div className="mx-auto max-w-7xl overflow-x-auto px-4 sm:px-6">
+          <nav className="flex gap-1 pb-px" aria-label="Dashboard sections">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                aria-current={tab === t.id ? "page" : undefined}
+                className={`inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 font-mono text-xs transition-colors ${
+                  tab === t.id
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <t.icon className="h-3.5 w-3.5" />
+                {t.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6">
+        {tab === "overview" && (
+          <div className="di-fade-up space-y-4">
+            {/* stat cards */}
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <StatCard icon={<Clock className="h-4 w-4 text-primary" />} label="uptime" value={uptime} sub={activatedAt ? `since ${new Date(activatedAt).toLocaleString()}` : undefined} />
+              <StatCard icon={<MessageCircle className="h-4 w-4 text-primary" />} label="channels" value={`${connected.length}/2`} sub={connected.length ? connected.map((c) => c.handle || c.type).join(" · ") : "none paired"} />
+              <StatCard icon={<Cable className="h-4 w-4 text-primary" />} label="fallback chain" value={`${enabledProviders.length} brain${enabledProviders.length === 1 ? "" : "s"}`} sub={enabledProviders.length ? `primary: ${enabledProviders[0].label}` : "demo brain"} />
+              <StatCard icon={<Wrench className="h-4 w-4 text-primary" />} label="tools armed" value={`${enabledTools.length}/${tools.length}`} sub={`${cycles} loop cycles`} />
+            </div>
+
+            {/* loop + quick actions */}
+            <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+              <Panel className="p-5">
+                <div className="flex items-center justify-between border-b border-border/70 pb-3">
+                  <div className="flex items-center gap-2">
+                    <HeartPulse className="h-4 w-4 text-primary" />
+                    <MonoLabel>live loop — {profile.agentName} working 24/7</MonoLabel>
+                  </div>
+                  <StatusDot ok />
+                </div>
+                <div className="di-scroll mt-3 max-h-72 space-y-2 overflow-y-auto font-mono text-xs">
+                  {loopFeed.length === 0 && (
+                    <p className="text-muted-foreground">loop warming up — first tick lands in a few seconds…</p>
+                  )}
+                  {loopFeed.map((e) => (
+                    <div key={e.id} className="di-fade-up flex items-start gap-2">
+                      <span className="text-primary">❯</span>
+                      <span className="shrink-0 text-muted-foreground">
+                        {new Date(e.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                      </span>
+                      <span className="text-foreground/85">{e.title}</span>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+
+              <div className="space-y-4">
+                <Panel className="p-5">
+                  <MonoLabel>missions</MonoLabel>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Standing orders from the wizard. {profile.agentName} optimizes its loop around these:
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {questionnaire.goals.map((g) => (
+                      <span key={g} className="rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 text-[11px]">
+                        {g}
+                      </span>
+                    ))}
+                  </div>
+                </Panel>
+                <Panel className="p-5">
+                  <MonoLabel>self-built skills</MonoLabel>
+                  <div className="mt-2 space-y-1.5 font-mono text-xs text-muted-foreground">
+                    <div className="flex justify-between"><span>pdf-extract</span><span className="text-primary">armed</span></div>
+                    <div className="flex justify-between"><span>inbox-triage</span><span className="text-primary">armed</span></div>
+                    <div className="flex justify-between"><span>price-watch</span><span className="text-amber-400">drafting</span></div>
+                  </div>
+                  <p className="mt-3 text-[11px] text-muted-foreground">
+                    The agent writes its own skills when a task needs one — this registry grows as it works.
+                  </p>
+                </Panel>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "console" && <AgentConsole />}
+
+        {tab === "channels" && (
+          <div className="di-fade-up space-y-4">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <WhatsAppCard
+                channel={channels.find((c) => c.type === "whatsapp")}
+                onPair={(c) => addChannel(c)}
+              />
+              <TelegramCard
+                channel={channels.find((c) => c.type === "telegram")}
+                onPair={(c) => addChannel(c)}
+              />
+            </div>
+            {connected.length > 0 && (
+              <Panel className="p-5">
+                <div className="flex items-center justify-between">
+                  <MonoLabel>paired sessions</MonoLabel>
+                  <span className="font-mono text-[11px] text-muted-foreground">unlink revokes the gateway session</span>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {connected.map((c) => (
+                    <div key={c.id} className="flex items-center justify-between rounded-lg border border-border/70 bg-background/40 px-3 py-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <StatusDot ok />
+                        <div>
+                          <div className="text-sm font-medium capitalize">{c.type}</div>
+                          <div className="font-mono text-[11px] text-muted-foreground">
+                            {c.handle || c.label}
+                            {c.connectedAt ? ` · linked ${timeAgo(c.connectedAt)}` : ""}
+                          </div>
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="font-mono text-xs text-red-400 hover:text-red-300"
+                        onClick={() => {
+                          removeChannel(c.id);
+                          logActivity({ kind: "channel", title: `Channel unlinked: ${c.type}` });
+                        }}
+                      >
+                        Unlink
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+            )}
+          </div>
+        )}
+
+        {tab === "brains" && <div className="di-fade-up"><BrainsPanel /></div>}
+        {tab === "tools" && <div className="di-fade-up"><ToolsPanel /></div>}
+
+        {tab === "activity" && (
+          <div className="di-fade-up">
+            <Panel className="p-5">
+              <div className="flex items-center justify-between border-b border-border/70 pb-3">
+                <div className="flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-primary" />
+                  <MonoLabel>full activity log</MonoLabel>
+                </div>
+                <span className="font-mono text-[11px] text-muted-foreground">{activity.length} events</span>
+              </div>
+              <div className="di-scroll mt-3 max-h-[62vh] space-y-1 overflow-y-auto">
+                {activity.length === 0 && (
+                  <p className="py-8 text-center text-sm text-muted-foreground">No events yet.</p>
+                )}
+                {activity.map((e) => (
+                  <ActivityRow key={e.id} e={e} />
+                ))}
+              </div>
+            </Panel>
+          </div>
+        )}
+      </main>
+
+      <footer className="border-t border-border/60">
+        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-4 font-mono text-[11px] text-muted-foreground sm:flex-row sm:px-6">
+          <span className="inline-flex items-center gap-1.5">
+            <MessagesSquare className="h-3.5 w-3.5 text-primary" />
+            {tasksHandled} task{tasksHandled === 1 ? "" : "s"} handled this session
+          </span>
+          <button onClick={() => setView("landing")} className="hover:text-foreground">
+            deep-init v1.0.0 · agent kernel
+          </button>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function StatCard({ icon, label, value, sub }: { icon: React.ReactNode; label: string; value: string; sub?: string }) {
+  return (
+    <Panel className="p-4">
+      <div className="flex items-center justify-between">
+        <MonoLabel>{label}</MonoLabel>
+        {icon}
+      </div>
+      <div className="mt-2 font-mono text-xl font-bold tracking-tight text-foreground">{value}</div>
+      {sub && <div className="mt-1 truncate text-[11px] text-muted-foreground">{sub}</div>}
+    </Panel>
+  );
+}
+
+const KIND_COLOR: Record<ActivityEvent["kind"], string> = {
+  system: "text-primary",
+  heartbeat: "text-primary/70",
+  message: "text-emerald-400",
+  channel: "text-amber-400",
+  provider: "text-emerald-400",
+  tool: "text-emerald-400",
+  task: "text-foreground/80",
+  error: "text-red-400",
+};
+
+function ActivityRow({ e }: { e: ActivityEvent }) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-secondary/40">
+      <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-current ${KIND_COLOR[e.kind]}`} />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm leading-snug">{e.title}</div>
+        {e.detail && <div className="truncate font-mono text-[11px] text-muted-foreground">{e.detail}</div>}
+      </div>
+      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{timeAgo(e.at)}</span>
+    </div>
+  );
+}
