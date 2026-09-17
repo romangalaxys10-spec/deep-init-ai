@@ -14,6 +14,8 @@ A 24×7 personal autonomous assistant you talk to on **Telegram** — with a ful
 [![Telegram Bot API](https://img.shields.io/badge/Telegram_Bot_API-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
 [![Made with GLM 5.3 FLASH](https://img.shields.io/badge/made_with-GLM_5.3_FLASH-F0592A?style=for-the-badge)](https://z.ai)
 
+> 🎁 **Need the Z.AI GLM Coding Plan?** Check this invite token for **10% OFF** → **[z.ai/subscribe?ic=ROK78RJKNW](https://z.ai/subscribe?ic=ROK78RJKNW)**
+
 **[Live demo →](https://deep-init-ai.vercel.app)** · [Quickstart](#-quickstart) · [Screenshots](#-screenshots) · [Architecture](#-architecture)
 
 </div>
@@ -30,7 +32,7 @@ A 24×7 personal autonomous assistant you talk to on **Telegram** — with a ful
 | 🤖 **Telegram, actually wired** | Pair the **built-in bot** (`@init_smart_bot`) with zero setup, or bring your **own @BotFather bot** (token verified live, webhook auto-registered on public origins). Send your Channel Pairing Token (`DIP-XXXX-XXXX`) to the bot → `Paired ✓` → from then on it answers every message through your agent's real brain chain. |
 | 🧠 **Any AI provider + automatic fallback** | OpenAI-compatible and Anthropic-native endpoints (OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Mistral, Gemini, Ollama…). The chain is tried top-down; failures, timeouts and rate-limits fall through mid-task. An **offline reflex tier** catches the last resort — the agent *never goes mute*, even with zero providers and no cloud egress. |
 | 🔬 **Hermes & Moltis cognition packs** | Port the minds of the two leading open-source agent projects onto your Init — enable one, both, or neither with a toggle. Hermes brings tool-use enforcement, no-fabrication discipline and parallel calls; Moltis brings its SOUL.md personality, opinionated tone and calc engine. Both ON = hybrid cognition. |
-| 🎙 **Voice mode** | Talk to your agent hands-free in the web console: continuous speech-to-text (Chrome/Edge/Safari), replies spoken back with natural neural voices, and the mic auto-reopens after each answer — a real conversation loop. |
+| 🎙 **Voice mode, both ways** | Talk to your agent hands-free in the web console: continuous speech-to-text, replies spoken back with natural neural voices, and the mic auto-reopens after each answer — a real conversation loop. Works in **any browser**: when live recognition isn't available (Firefox, blocked speech servers), it transparently switches to compat capture (mic PCM → keyless server-side transcription). **Telegram voice notes are transcribed too** — speak your messages, get answers. |
 | 👥 **Access whitelist** | Mint per-person pairing tokens for friends/teammates and choose per user whether they **share** the agent's memory & context or get an **isolated** private thread. |
 | 🔐 **Web portal logins** | The wizard generates a portal username + access token (`di_…`); the console is locked behind them on every visit. |
 | 🎛 **Mission-control dashboard** | Live loop feed, agent console, gateway status (bound chats, recent replies, resync, poll bridge), provider health checks, tools/MCP registry, virtual instances (SSH + pair-tunnel), full activity log. |

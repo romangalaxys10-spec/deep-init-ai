@@ -63,12 +63,12 @@ export function AgentConsole() {
       voiceMode.stop();
       return;
     }
-    if (!voiceMode.supported) {
+    const started = voiceMode.start();
+    if (!started) {
       toast({ title: t("vm.unsupportedTitle"), description: t("vm.unsupportedBody"), variant: "destructive" });
       return;
     }
     if (!voice.enabled) setVoice({ enabled: true });
-    voiceMode.start();
     logActivity({ kind: "message", title: "Voice mode session started", detail: `locale ${uiLang}` });
   };
 
@@ -327,7 +327,7 @@ export function AgentConsole() {
 
       {/* input */}
       <div className="border-t border-border/70 p-3">
-        <VoiceBar state={voiceMode.state} interim={voiceMode.interim} />
+        <VoiceBar state={voiceMode.state} interim={voiceMode.interim} compat={voiceMode.compat} note={voiceMode.state === "off" ? null : voiceMode.lastError} />
         <div className="flex items-end gap-2">
           <span className="pb-3 font-mono text-sm text-primary">❯</span>
           <Textarea

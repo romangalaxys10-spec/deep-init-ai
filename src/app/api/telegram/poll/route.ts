@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAgent, persistRegistry, refreshRegistry } from "@/lib/agent-registry";
+import { getAgent, markUpdateSeen, persistRegistry, refreshRegistry } from "@/lib/agent-registry";
 import { handleTelegramUpdate, tgGetUpdates, type TelegramUpdate } from "@/lib/telegram";
 
 export const maxDuration = 60;
@@ -51,6 +51,8 @@ export async function POST(req: NextRequest) {
 
     for (const update of res.result) {
       maxId = Math.max(maxId, update.update_id + 1);
+      // duplicate-delivery guard: skip updates already handled (webhook overlap)
+      if (!markUpdateSeen(agent.botToken, update.update_id)) continue;
       try {
         const outcome = await handleTelegramUpdate(update as TelegramUpdate, agent.botToken);
         processed += 1;

@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
-import { persistRegistry, refreshRegistry } from "@/lib/agent-registry";
+import { NextRequest, NextResponse, after } from "next/server";
+import { markUpdateSeen, persistRegistry, refreshRegistry } from "@/lib/agent-registry";
 import { handleTelegramUpdate, type TelegramUpdate } from "@/lib/telegram";
 import { BUILTIN_BOT_TOKEN } from "@/lib/telegram";
 
@@ -17,9 +17,10 @@ function botTokenFromRequest(req: NextRequest): string | null {
  * Telegram webhook receiver.
  * URL: /api/telegram/webhook?t=<botToken>   (t=builtin for the shared bot)
  *
- * Looks up the agent runtime bound to this bot (via chat bindings or a
- * pairing token in the message) and answers through the provider chain.
- * Always returns 200 so Telegram doesn't retry-loop.
+ * Acknowledges INSTANTLY (Telegram re-delivers when it doesn't get a
+ * timely 200 — one of the root causes of duplicate replies) and runs
+ * the handler in the request's background window via after(). An
+ * update-id ledger drops any redelivered/duplicated update.
  */
 export async function POST(req: NextRequest) {
   const botToken = botTokenFromRequest(req);
@@ -33,16 +34,25 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ ok: true, skipped: "invalid update" });
   }
-
-  try {
-    await refreshRegistry();
-    const outcome = await handleTelegramUpdate(update, botToken);
-    await persistRegistry();
-    return NextResponse.json({ ok: true, ...outcome });
-  } catch (e) {
-    console.error("[telegram:webhook]", e);
-    return NextResponse.json({ ok: true, error: "handler failure" });
+  if (!update || typeof update.update_id !== "number") {
+    return NextResponse.json({ ok: true, skipped: "invalid update" });
   }
+
+  if (!markUpdateSeen(botToken, update.update_id)) {
+    return NextResponse.json({ ok: true, skipped: "duplicate update" });
+  }
+
+  after(async () => {
+    try {
+      await refreshRegistry();
+      await handleTelegramUpdate(update, botToken);
+      await persistRegistry();
+    } catch (e) {
+      console.error("[telegram:webhook]", e);
+    }
+  });
+
+  return NextResponse.json({ ok: true });
 }
 
 export async function GET() {

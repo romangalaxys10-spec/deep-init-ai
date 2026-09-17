@@ -17,6 +17,7 @@ import {
 } from "./agent-registry";
 import { runAgentChainStreaming } from "./brain";
 import { brainSignature } from "./brains";
+import { transcribeAudio } from "./asr";
 import type { GatewayChat } from "./types";
 import {
   extractFileAttachments,
@@ -370,10 +371,44 @@ async function streamReplyToChat(
   const st = {
     previewSent: false,
     draftMode: false,
-    draftTried: false,
     messageId: 0,
     lastEditAt: 0,
     lastLen: 0,
+    /** in-flight claim of the stream surface (draft → placeholder).
+     * The final send ALWAYS awaits this — otherwise fast replies race
+     * the placeholder round-trip and the user gets the reply TWICE
+     * (placeholder message + final message). */
+    surface: null as Promise<void> | null,
+  };
+
+  /** Claim the streaming surface exactly once: try a Bot API 9.5 draft;
+   * if drafts are unsupported, plant an editable placeholder message. */
+  const claimSurface = (full: string) => {
+    if (!st.surface) {
+      st.surface = (async () => {
+        try {
+          const r = await tgCall(token, "sendMessageDraft", { chat_id: chatId, text: plainPreview(full, 1200) }, 8_000);
+          if (r.ok) {
+            st.draftMode = true;
+            return;
+          }
+        } catch {
+          /* draft unsupported / network hiccup → editable placeholder */
+        }
+        try {
+          const pr = await tgCall(token, "sendMessage", {
+            chat_id: chatId,
+            text: plainPreview(full, 1200),
+            disable_web_page_preview: true,
+          });
+          const id = (pr.result as { message_id?: number } | undefined)?.message_id;
+          if (pr.ok && typeof id === "number") st.messageId = id;
+        } catch {
+          /* final send happens as a fresh message */
+        }
+      })();
+    }
+    return st.surface;
   };
 
   const result = await runAgentChainStreaming({
@@ -390,17 +425,7 @@ async function streamReplyToChat(
         if (full.trim().length < 30) return;
         st.previewSent = true;
         stopTyping();
-        if (!st.draftTried) {
-          st.draftTried = true;
-          void tgCall(token, "sendMessageDraft", { chat_id: chatId, text: plainPreview(full, 1200) }, 8_000)
-            .then((r) => {
-              if (r.ok) st.draftMode = true;
-              else void claimPlaceholder(full);
-            })
-            .catch(() => void claimPlaceholder(full));
-          return;
-        }
-        void claimPlaceholder(full);
+        void claimSurface(full);
         return;
       }
       const now = Date.now();
@@ -425,34 +450,39 @@ async function streamReplyToChat(
   });
   stopTyping();
 
-  async function claimPlaceholder(full: string) {
-    try {
-      const r = await tgCall(token, "sendMessage", {
-        chat_id: chatId,
-        text: plainPreview(full, 1200),
-        disable_web_page_preview: true,
-      });
-      const id = (r.result as { message_id?: number } | undefined)?.message_id;
-      if (r.ok && typeof id === "number") st.messageId = id;
-    } catch {
-      /* channel hiccup — final send still happens */
-    }
-  }
-
   if (!result.ok || !result.content) {
     const errText = `⚠ All brains failed to answer just now. Last error: ${
       result.fallbackChain.at(-1)?.error || result.error || "unknown"
     }`;
+    // a claimed surface may already show a preview — finalize it, never send twice
+    if (st.previewSent && st.surface) await st.surface;
+    if (st.messageId) {
+      const edited = await tgCall(token, "editMessageText", {
+        chat_id: chatId,
+        message_id: st.messageId,
+        text: errText.slice(0, 3800),
+        disable_web_page_preview: true,
+      });
+      if (!edited.ok) await tgSendMessage(token, chatId, errText);
+    } else if (!st.draftMode) {
+      // draft-only previews vanish — the user still needs the failure notice
+      await tgSendMessage(token, chatId, errText);
+    }
     return { text: errText, ok: false, error: result.error };
   }
 
   const reply = result.content;
 
+  if (st.previewSent) {
+    // ⏱ THE duplicate-reply fix: wait out the in-flight surface claim
+    // before deciding to edit (placeholder exists) or send (none yet).
+    await st.surface;
+  }
   if (st.previewSent && st.messageId) {
     // finalize: swap the preview for the fully formatted version (chunk-aware)
     await sendFormatted(token, chatId, reply, st.messageId);
   } else {
-    // stream never produced a preview (fast response) — send formatted now
+    // no real message on the surface yet (draft-only or no preview) — send once
     await sendFormatted(token, chatId, reply);
   }
   return { text: reply, ok: true };
@@ -474,7 +504,7 @@ export interface TelegramPhotoSize {
 
 export interface TelegramMessage {
   message_id: number;
-  from?: { id: number; first_name?: string; username?: string };
+  from?: { id: number; first_name?: string; username?: string; language_code?: string };
   chat: { id: number; type: string; first_name?: string; title?: string };
   text?: string;
   caption?: string;
@@ -545,7 +575,11 @@ interface Intake {
   note?: string;
 }
 
-/** Transcribe an incoming Telegram voice/audio note via the built-in ASR. */
+/**
+ * Transcribe an incoming Telegram voice/audio note.
+ * Keyless cloud ASR (ogg/opus → WAV → Google Web Speech) with the
+ * z-ai SDK tier as fallback — works on every deployment.
+ */
 async function transcribeTelegramVoice(
   botToken: string,
   msg: TelegramMessage
@@ -554,23 +588,24 @@ async function transcribeTelegramVoice(
   if (!fileId) return null;
   const bytes = await tgGetFileBytes(botToken, fileId);
   if (!bytes) return { text: "", note: "I couldn't download that voice note — please try again or type it." };
+  const mime = msg.voice?.mime_type || msg.audio?.mime_type || "";
+  const lang = msg.from?.language_code || "en";
   try {
-    const zai = await getZAI();
-    const r = (await zai.audio.asr.create({ file_base64: bytes.toString("base64") })) as
-      | { text?: string; result?: { text?: string } }
-      | string;
-    const text =
-      typeof r === "string"
-        ? r
-        : r.text || r.result?.text || "";
-    if (!text.trim()) {
-      return { text: "", note: "I couldn't make out the audio — could you type it?" };
+    const r = await transcribeAudio(bytes, mime, lang);
+    if (r.text) {
+      return { text: r.text, note: `[voice note from ${msg.from?.first_name || "user"}]` };
     }
-    return { text: text.trim(), note: `[voice note from ${msg.from?.first_name || "user"}]` };
+    return {
+      text: "",
+      note:
+        r.error === "no speech recognized"
+          ? "I couldn't make out the audio — could you type it?"
+          : `Voice transcription hit a snag (${r.error || "unknown"}) — please type it and I'll take it from there.`,
+    };
   } catch {
     return {
       text: "",
-      note: "Voice transcription is unavailable on this deployment — type your message and I'll take it from there.",
+      note: "Voice transcription is unavailable right now — type your message and I'll take it from there.",
     };
   }
 }

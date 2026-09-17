@@ -187,6 +187,41 @@ export function serializeForTest(): Record<string, unknown> {
   return JSON.parse(serialize(mem));
 }
 
+/* ---------------- update-id ledger (duplicate delivery guard) ---------------- */
+
+const g2 = globalThis as unknown as {
+  __diSeenUpdates?: Map<string, Map<number, number>>;
+};
+const seenUpdates: Map<string, Map<number, number>> = (g2.__diSeenUpdates ??= new Map());
+
+/**
+ * Marks a Telegram update as seen for this bot. Returns false when the
+ * update was ALREADY processed — Telegram can redeliver (webhook
+ * timeouts/retries, poll-bridge overlap) and each redelivery used to
+ * produce a duplicate reply. In-instance ledger with a 2h half-life.
+ */
+export function markUpdateSeen(botToken: string, updateId: number): boolean {
+  let ledger = seenUpdates.get(botToken);
+  if (!ledger) {
+    ledger = new Map();
+    seenUpdates.set(botToken, ledger);
+  }
+  if (ledger.has(updateId)) return false;
+  const now = Date.now();
+  ledger.set(updateId, now);
+  if (ledger.size > 600) {
+    for (const [id, at] of ledger) {
+      if (now - at > 2 * 60 * 60 * 1000) ledger.delete(id);
+    }
+    while (ledger.size > 600) {
+      const oldest = ledger.keys().next().value;
+      if (oldest === undefined) break;
+      ledger.delete(oldest);
+    }
+  }
+  return true;
+}
+
 /* ---------------- refresh / persist ---------------- */
 
 function mergeIntoMem(fromDisk: Map<string, RegisteredAgent>) {
