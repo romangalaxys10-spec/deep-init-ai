@@ -14,6 +14,12 @@ import {
 export const PROVIDER_TIMEOUT_MS = 45_000;
 /** how many tool-call rounds we run when a model leaks tool syntax as text */
 export const MAX_TOOL_ROUNDS = 2;
+/** Honest notice shown when every round produced tool syntax but no text. */
+export const NO_TEXT_ANSWER = "The agent executed tool calls but returned no text answer.";
+/** Extra "stop calling tools, answer in words" retries before the notice. */
+export const NUDGE_RETRIES = 2;
+const ANSWER_NUDGE =
+  "TOOL PHASE OVER. Using the tool results above (or your own knowledge if there are none), write the final answer to the user NOW. Plain text only — no tool calls, no <function=…> blocks, no ```tool_call fences, no internal protocol narration. If the results were insufficient, say so in one short sentence.";
 
 type Msg = ChatRequest["messages"][number];
 
@@ -571,10 +577,54 @@ export async function runAgentChainStreaming(opts: StreamOpts): Promise<ChainRes
     const visible = sanitizeAgentText(cleaned);
 
     if (!calls.length || round === MAX_TOOL_ROUNDS) {
+      if (!visible && !prefix.trim()) {
+        /* Tool-mute auto-retry (mirrors runAgentChain): execute any pending
+           calls, then force a plain-text answer with nudge retries. The
+           emit wrapper keeps every delta sanitized for viewers. */
+        const feedback = calls.length ? await executeToolCalls(calls, opts.toolCtx) : "";
+        const nudge = [feedback, ANSWER_NUDGE].filter(Boolean).join("\n\n");
+        let retryMsgs: Msg[] = [
+          ...messages,
+          { role: "assistant", content: result.content },
+          { role: "user", content: nudge },
+        ];
+        for (let attempt = 0; attempt < NUDGE_RETRIES; attempt++) {
+          const retry = await runChainOnceStreaming(
+            providers,
+            retryMsgs,
+            opts.allowDemoBrain,
+            fallbackChain,
+            emit
+          );
+          if (!retry.ok || !retry.content) break;
+          const { cleaned: rCleaned } = extractToolCalls(retry.content);
+          const rVisible = sanitizeAgentText(rCleaned);
+          if (rVisible) {
+            const content = prefix.trim() ? `${prefix.trim()}\n\n${rVisible}` : rVisible;
+            return {
+              ok: true,
+              content,
+              via: retry.via,
+              latencyMs: retry.latencyMs,
+              fallbackChain,
+            };
+          }
+          retryMsgs = [
+            ...retryMsgs,
+            { role: "assistant", content: retry.content },
+            { role: "user", content: ANSWER_NUDGE },
+          ];
+        }
+        return {
+          ok: true,
+          content: NO_TEXT_ANSWER,
+          via: result.via,
+          latencyMs: result.latencyMs,
+          fallbackChain,
+        };
+      }
       const content =
-        visible ||
-        prefix.trim() ||
-        "The agent executed tool calls but returned no text answer.";
+        visible || prefix.trim() || NO_TEXT_ANSWER;
       return {
         ok: true,
         content,
@@ -693,9 +743,52 @@ export async function runAgentChain(opts: {
     const visible = sanitizeAgentText(cleaned);
 
     if (!calls.length || round === MAX_TOOL_ROUNDS) {
+      if (!visible) {
+        /* Tool-mute auto-retry: the model spent the whole conversation
+           emitting tool-call syntax with no user-visible text. Execute any
+           pending calls so their results aren't dropped, then explicitly
+           order a plain-text final answer and retry — only after
+           NUDGE_RETRIES failed attempts do we return the honest notice. */
+        const feedback = calls.length ? await executeToolCalls(calls, opts.toolCtx) : "";
+        const nudge = [feedback, ANSWER_NUDGE].filter(Boolean).join("\n\n");
+        let retryMsgs: Msg[] = [
+          ...messages,
+          { role: "assistant", content: result.content },
+          { role: "user", content: nudge },
+        ];
+        for (let attempt = 0; attempt < NUDGE_RETRIES; attempt++) {
+          const retry = await runChainOnce(providers, retryMsgs, opts.allowDemoBrain, fallbackChain);
+          if (!retry.ok || !retry.content) break;
+          const { cleaned: rCleaned } = extractToolCalls(retry.content);
+          const rVisible = sanitizeAgentText(rCleaned);
+          if (rVisible) {
+            /* any tool syntax in a nudged reply is noise at this point —
+               accept the text answer */
+            return {
+              ok: true,
+              content: rVisible,
+              via: retry.via,
+              latencyMs: retry.latencyMs,
+              fallbackChain,
+            };
+          }
+          retryMsgs = [
+            ...retryMsgs,
+            { role: "assistant", content: retry.content },
+            { role: "user", content: ANSWER_NUDGE },
+          ];
+        }
+        return {
+          ok: true,
+          content: NO_TEXT_ANSWER,
+          via: result.via,
+          latencyMs: result.latencyMs,
+          fallbackChain,
+        };
+      }
       return {
         ok: true,
-        content: visible || "The agent executed tool calls but returned no text answer.",
+        content: visible,
         via: result.via,
         latencyMs: result.latencyMs,
         fallbackChain,
