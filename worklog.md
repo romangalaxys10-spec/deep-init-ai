@@ -180,3 +180,24 @@ Stage Summary:
 - Prod chat works with zero config; agent never goes mute (verified via curl on prod)
 - README live on GitHub with all images rendering (banner + 11 screenshots, 200 OK via raw + repo page)
 - Commits: 73fd824 (SDK fix), reflex-brain commit, 1a5b6b6 (README) — all pushed to origin/main
+
+---
+Task ID: voice-mode
+Agent: main (Super Z)
+Task: Add voice mode to web chat (talk with the agent hands-free); star the GitHub repo
+
+Work Log:
+- Starred romangalaxys10-spec/deep-init-ai via GitHub API (204, confirmed)
+- Audited existing voice stack: useDictation (single-shot Web Speech STT), useSpeak (server TTS via msedge-tts — works on serverless, no API key), autoSpeak toggle; server ASR not viable on prod (internal-only endpoint)
+- Built useVoiceMode state machine (off → listening → thinking → speaking → listening) in voice.tsx: continuous SpeechRecognition with interim transcript, 900ms silence-debounce commit, auto-restart on segment end, permission-error handling
+- Console integration: VoiceModeButton header pill (localized state label), VoiceBar live status strip, auto-send on commit, mic hold during sends, auto-speak of final replies (stream-aware, was speaking mid-stream partials before), TTS-fail fallback resumes listening, MicButton hidden during sessions
+- Fixed latent auto-speak bug: partial stream text was spoken; now speaks only after stream completes
+- STT locale follows UI language (en-US/ru-RU/he-IL); vm.* i18n keys added for EN/RU/HE
+- Perf fix: demo brain cloud tier raced with 4.5s cap (DEMO_CLOUD_TIMEOUT_MS) — blocked-egress deploys answered in ~10.5s before; now reflex replies fast
+- E2E (scripts/e2e-voice.mjs, fake SpeechRecognition injected via addInitScript, realistic armed/silent segments): 10/10 PASS against production — incl. 2+2=4 reply, real TTS request, zero-click second exchange (17.5% of 100), clean toggle-off
+- README feature row added for voice mode; committed, pushed, deployed --prod
+
+Stage Summary:
+- Voice mode live on production: hands-free conversation loop, all green 10/10 e2e
+- Repo starred ✓
+- Commits pushed: voice mode + demo-brain race cap; deployment deep-init-dwcuekg40
