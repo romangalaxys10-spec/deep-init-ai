@@ -99,7 +99,7 @@ export function Panel({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-xl border border-border bg-card/80 backdrop-blur",
+        "relative overflow-hidden rounded-2xl border border-border bg-card shadow-[0_1px_2px_oklch(0.285_0.028_55/0.04),0_10px_30px_oklch(0.285_0.028_55/0.06)] backdrop-blur",
         glow && "di-glow",
         className
       )}

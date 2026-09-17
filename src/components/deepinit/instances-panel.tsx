@@ -275,7 +275,7 @@ function InstanceRow({
         </Button>
       </div>
       {(running || output) && (
-        <pre className="di-scroll mt-2 max-h-48 overflow-auto rounded-md border border-border/60 bg-black/40 p-3 font-mono text-[11px] leading-relaxed text-foreground/90">
+        <pre className="di-scroll mt-2 max-h-48 overflow-auto rounded-xl border border-border/60 bg-stone-900 p-3 font-mono text-[11px] leading-relaxed text-stone-100">
           {running ? "running…" : output}
         </pre>
       )}
@@ -496,7 +496,7 @@ export function TunnelSection() {
               </div>
             )}
             {(waiting || (output !== null && activeId === t.id)) && (
-              <pre className="di-scroll mt-2 max-h-48 overflow-auto rounded-md border border-border/60 bg-black/40 p-3 font-mono text-[11px] leading-relaxed text-foreground/90">
+              <pre className="di-scroll mt-2 max-h-48 overflow-auto rounded-xl border border-border/60 bg-stone-900 p-3 font-mono text-[11px] leading-relaxed text-stone-100">
                 {waiting && activeId === t.id ? "waiting for machine…" : output}
               </pre>
             )}
@@ -540,7 +540,7 @@ function ScriptDialog({
           </TabsList>
           <TabsContent value="bash" className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <code className="di-scroll overflow-x-auto rounded bg-black/40 px-2 py-1 font-mono text-[10px] text-primary/90">
+              <code className="di-scroll overflow-x-auto rounded-full bg-stone-900 px-3 py-1 font-mono text-[10px] text-orange-200">
                 curl -fsSL &quot;…/api/tunnel/script?id={bundle.id}&amp;token={bundle.token}&quot; | bash
               </code>
               <div className="flex shrink-0 gap-1.5">
@@ -550,7 +550,7 @@ function ScriptDialog({
                 </Button>
               </div>
             </div>
-            <pre className="di-scroll max-h-[42vh] overflow-auto rounded-md border border-border/60 bg-black/50 p-3 font-mono text-[10.5px] leading-relaxed text-foreground/85">
+            <pre className="di-scroll max-h-[42vh] overflow-auto rounded-xl border border-border/60 bg-stone-900 p-3 font-mono text-[10.5px] leading-relaxed text-stone-100">
               {bundle.bash}
             </pre>
           </TabsContent>
@@ -561,7 +561,7 @@ function ScriptDialog({
                 <Download className="mr-1 h-3 w-3" /> .ps1
               </Button>
             </div>
-            <pre className="di-scroll max-h-[42vh] overflow-auto rounded-md border border-border/60 bg-black/50 p-3 font-mono text-[10.5px] leading-relaxed text-foreground/85">
+            <pre className="di-scroll max-h-[42vh] overflow-auto rounded-xl border border-border/60 bg-stone-900 p-3 font-mono text-[10.5px] leading-relaxed text-stone-100">
               {bundle.powershell}
             </pre>
           </TabsContent>

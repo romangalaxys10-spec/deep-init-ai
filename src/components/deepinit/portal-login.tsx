@@ -5,9 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useDeepInit } from "@/lib/store";
-import { KeyRound, Loader2, ShieldCheck, TerminalSquare } from "lucide-react";
+import { KeyRound, Loader2, ShieldCheck, Sparkles, TerminalSquare } from "lucide-react";
 import { useState } from "react";
-import { Logo, MonoLabel, Panel } from "./ui-bits";
+import { CopyField, Logo, MonoLabel, Panel } from "./ui-bits";
 
 export const AUTH_SESSION_KEY = "di-portal-auth";
 
@@ -21,16 +21,31 @@ export function PortalLogin({ onSuccess }: { onSuccess: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
 
+  /* Escape hatch: if this browser holds an agent created before portal
+     credentials existed (or they were wiped), mint a fresh set on entry so
+     the operator is never permanently locked out. Runs exactly once at
+     mount via the lazy initializer (store updates are idempotent). */
+  const [minted] = useState(() => {
+    const { profile: p, ensureCredentials: ensure } = useDeepInit.getState();
+    if (!p.portalUser || !p.portalToken) {
+      ensure();
+      return true;
+    }
+    return false;
+  });
+
   const attempt = (e?: React.FormEvent) => {
     e?.preventDefault();
     setChecking(true);
     setError(null);
     // brief beat so the terminal feel lands
     setTimeout(() => {
+      const u = user.trim().toLowerCase();
+      const t = token.trim().toLowerCase();
       const userOk =
-        user.trim().toLowerCase() === (profile.portalUser || "").toLowerCase() ||
-        user.trim().toLowerCase() === (profile.displayName || "").toLowerCase();
-      const tokenOk = token.trim() === (profile.portalToken || "");
+        u === (profile.portalUser || "").toLowerCase() ||
+        u === (profile.displayName || "").toLowerCase();
+      const tokenOk = Boolean(profile.portalToken) && t === profile.portalToken!.toLowerCase();
       if (userOk && tokenOk) {
         try {
           sessionStorage.setItem(AUTH_SESSION_KEY, "1");
@@ -43,7 +58,7 @@ export function PortalLogin({ onSuccess }: { onSuccess: () => void }) {
         setError(
           userOk || tokenOk
             ? "Both the username and the token are required and must match."
-            : "No match. Credentials were generated during the wizard and live in this browser."
+            : "No match. Use the username + access token generated during the wizard (check the wizard's final screen or your password manager)."
         );
       }
       setChecking(false);
@@ -63,9 +78,9 @@ export function PortalLogin({ onSuccess }: { onSuccess: () => void }) {
         <Panel className="p-6">
           <div className="border-b border-border/70 pb-4">
             <MonoLabel className="mb-1">{`${profile.agentName || "agent"} · locked`}</MonoLabel>
-            <h1 className="text-xl font-bold tracking-tight">Authenticate to open the console</h1>
+            <h1 className="text-xl font-bold tracking-tight">Welcome back — sign in to the console</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Log in with the username + access token generated during the initial wizard.
+              Use the username + access token generated during the initial wizard.
             </p>
           </div>
 
@@ -94,12 +109,29 @@ export function PortalLogin({ onSuccess }: { onSuccess: () => void }) {
                 className="font-mono"
               />
             </div>
-            {error && <p className="text-xs text-red-400">{error}</p>}
+            {error && <p className="text-xs text-red-500">{error}</p>}
             <Button type="submit" disabled={checking || !user.trim() || !token.trim()} className="w-full font-mono">
               {checking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
               {checking ? "checking..." : "Unlock console"}
             </Button>
           </form>
+
+          {minted && (
+            <div className="mt-4 rounded-xl border border-primary/30 bg-secondary/50 p-4">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-primary" />
+                <MonoLabel>new credentials generated — save them now</MonoLabel>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                This browser had an agent without portal credentials, so a fresh set was minted. Use them below —
+                and store them somewhere safe.
+              </p>
+              <div className="mt-3 grid gap-2">
+                <CopyField label="portal username" value={profile.portalUser || "—"} />
+                <CopyField label="portal token" value={profile.portalToken || "—"} />
+              </div>
+            </div>
+          )}
 
           <p className="mt-4 flex items-start gap-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
             <TerminalSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
@@ -113,7 +145,7 @@ export function PortalLogin({ onSuccess }: { onSuccess: () => void }) {
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 font-mono text-[11px] text-red-400 hover:text-red-300"
+            className="h-7 font-mono text-[11px] text-red-500 hover:text-red-400"
             onClick={() => {
               if (confirm("Factory reset this browser's agent data and start a fresh wizard?")) {
                 try {

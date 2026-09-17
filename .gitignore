@@ -57,3 +57,7 @@ server.log
 # sandbox platform artifacts (not part of the app)
 /skills/
 /examples/
+
+# local artifacts
+download/
+tool-results/

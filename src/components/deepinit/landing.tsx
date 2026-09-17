@@ -147,9 +147,9 @@ export function Landing({ onInitialize }: { onInitialize: () => void }) {
             <div className="mb-4 flex items-center justify-between border-b border-border/70 pb-3">
               <MonoLabel>boot sequence</MonoLabel>
               <div className="flex gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-red-500/70" />
-                <span className="h-2.5 w-2.5 rounded-full bg-amber-400/70" />
-                <span className="h-2.5 w-2.5 rounded-full bg-primary/80" />
+                <span className="h-2.5 w-2.5 rounded-full bg-rose-300" />
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-300" />
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-300" />
               </div>
             </div>
             <BootLog lines={BOOT_LINES} speed={520} className="min-h-[190px]" />
@@ -217,6 +217,12 @@ export function Landing({ onInitialize }: { onInitialize: () => void }) {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-6 font-mono text-xs text-muted-foreground sm:flex-row sm:px-6">
           <Logo className="text-sm" />
           <span>runs on your machine · your keys · your data</span>
+          <span className="text-[11px]">
+            made using <span className="text-primary">GLM 5.3 FLASH</span> · by Roman ·{" "}
+            <a href="https://www.rommark.dev" target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-foreground">
+              www.rommark.dev
+            </a>
+          </span>
         </div>
       </footer>
     </div>

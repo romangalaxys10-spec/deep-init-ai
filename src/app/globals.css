@@ -43,60 +43,68 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* ============================================================
+   Deep-init AI — bright "daylight" theme
+   Inspired by rene.co: warm cream canvas, vivid coral accent,
+   soft mint/sky support tones, friendly pill shapes, airy cards.
+   ============================================================ */
+
 :root {
-  --radius: 0.625rem;
-  --background: oklch(0.13 0.005 160);
-  --foreground: oklch(0.93 0.005 160);
-  --card: oklch(0.165 0.006 160);
-  --card-foreground: oklch(0.93 0.005 160);
-  --popover: oklch(0.175 0.006 160);
-  --popover-foreground: oklch(0.93 0.005 160);
-  --primary: oklch(0.77 0.19 152);
-  --primary-foreground: oklch(0.13 0.02 152);
-  --secondary: oklch(0.22 0.008 160);
-  --secondary-foreground: oklch(0.93 0.005 160);
-  --muted: oklch(0.21 0.008 160);
-  --muted-foreground: oklch(0.62 0.01 160);
-  --accent: oklch(0.24 0.015 160);
-  --accent-foreground: oklch(0.93 0.005 160);
-  --destructive: oklch(0.63 0.21 25);
-  --border: oklch(0.26 0.008 160);
-  --input: oklch(0.24 0.008 160);
-  --ring: oklch(0.77 0.19 152);
-  --chart-1: oklch(0.77 0.19 152);
-  --chart-2: oklch(0.83 0.16 90);
-  --chart-3: oklch(0.75 0.12 170);
-  --chart-4: oklch(0.68 0.19 25);
-  --chart-5: oklch(0.85 0.18 95);
-  --sidebar: oklch(0.15 0.006 160);
-  --sidebar-foreground: oklch(0.93 0.005 160);
-  --sidebar-primary: oklch(0.77 0.19 152);
-  --sidebar-primary-foreground: oklch(0.13 0.02 152);
-  --sidebar-accent: oklch(0.24 0.015 160);
-  --sidebar-accent-foreground: oklch(0.93 0.005 160);
-  --sidebar-border: oklch(0.26 0.008 160);
-  --sidebar-ring: oklch(0.77 0.19 152);
+  --radius: 1rem;
+  --background: oklch(0.977 0.012 88);          /* warm ivory */
+  --foreground: oklch(0.285 0.028 55);          /* espresso */
+  --card: oklch(0.998 0.003 90);                /* paper white */
+  --card-foreground: oklch(0.285 0.028 55);
+  --popover: oklch(0.998 0.003 90);
+  --popover-foreground: oklch(0.285 0.028 55);
+  --primary: oklch(0.665 0.19 41);              /* vivid coral */
+  --primary-foreground: oklch(0.995 0.008 85);
+  --secondary: oklch(0.945 0.035 78);           /* soft peach */
+  --secondary-foreground: oklch(0.34 0.05 45);
+  --muted: oklch(0.948 0.014 85);
+  --muted-foreground: oklch(0.51 0.028 62);
+  --accent: oklch(0.935 0.048 72);              /* apricot hover */
+  --accent-foreground: oklch(0.32 0.05 48);
+  --destructive: oklch(0.585 0.21 27);
+  --border: oklch(0.9 0.02 80);
+  --input: oklch(0.91 0.018 80);
+  --ring: oklch(0.665 0.19 41 / 0.55);
+  --chart-1: oklch(0.665 0.19 41);              /* coral */
+  --chart-2: oklch(0.8 0.14 78);                /* amber */
+  --chart-3: oklch(0.72 0.13 175);              /* mint/teal */
+  --chart-4: oklch(0.7 0.11 245);               /* sky */
+  --chart-5: oklch(0.78 0.15 100);              /* leaf */
+  --sidebar: oklch(0.985 0.008 88);
+  --sidebar-foreground: oklch(0.285 0.028 55);
+  --sidebar-primary: oklch(0.665 0.19 41);
+  --sidebar-primary-foreground: oklch(0.995 0.008 85);
+  --sidebar-accent: oklch(0.935 0.048 72);
+  --sidebar-accent-foreground: oklch(0.32 0.05 48);
+  --sidebar-border: oklch(0.9 0.02 80);
+  --sidebar-ring: oklch(0.665 0.19 41 / 0.55);
 }
 
+/* The app ships a single bright theme — keep .dark identical so a stray
+   class can never flash the old terminal palette back. */
 .dark {
-  --background: oklch(0.13 0.005 160);
-  --foreground: oklch(0.93 0.005 160);
-  --card: oklch(0.165 0.006 160);
-  --card-foreground: oklch(0.93 0.005 160);
-  --popover: oklch(0.175 0.006 160);
-  --popover-foreground: oklch(0.93 0.005 160);
-  --primary: oklch(0.77 0.19 152);
-  --primary-foreground: oklch(0.13 0.02 152);
-  --secondary: oklch(0.22 0.008 160);
-  --secondary-foreground: oklch(0.93 0.005 160);
-  --muted: oklch(0.21 0.008 160);
-  --muted-foreground: oklch(0.62 0.01 160);
-  --accent: oklch(0.24 0.015 160);
-  --accent-foreground: oklch(0.93 0.005 160);
-  --destructive: oklch(0.63 0.21 25);
-  --border: oklch(0.26 0.008 160);
-  --input: oklch(0.24 0.008 160);
-  --ring: oklch(0.77 0.19 152);
+  --background: oklch(0.977 0.012 88);
+  --foreground: oklch(0.285 0.028 55);
+  --card: oklch(0.998 0.003 90);
+  --card-foreground: oklch(0.285 0.028 55);
+  --popover: oklch(0.998 0.003 90);
+  --popover-foreground: oklch(0.285 0.028 55);
+  --primary: oklch(0.665 0.19 41);
+  --primary-foreground: oklch(0.995 0.008 85);
+  --secondary: oklch(0.945 0.035 78);
+  --secondary-foreground: oklch(0.34 0.05 45);
+  --muted: oklch(0.948 0.014 85);
+  --muted-foreground: oklch(0.51 0.028 62);
+  --accent: oklch(0.935 0.048 72);
+  --accent-foreground: oklch(0.32 0.05 48);
+  --destructive: oklch(0.585 0.21 27);
+  --border: oklch(0.9 0.02 80);
+  --input: oklch(0.91 0.018 80);
+  --ring: oklch(0.665 0.19 41 / 0.55);
 }
 
 @layer base {
@@ -106,39 +114,44 @@
   body {
     @apply bg-background text-foreground;
   }
+  ::selection {
+    background: oklch(0.665 0.19 41 / 0.22);
+  }
 }
 
 /* ---------- Deep-init custom ---------- */
 
+/* Warm daylight canvas: soft coral / mint / sky blobs over a fine dotted grid */
 .di-grid-bg {
   background-image:
-    linear-gradient(to right, oklch(1 0 0 / 0.025) 1px, transparent 1px),
-    linear-gradient(to bottom, oklch(1 0 0 / 0.025) 1px, transparent 1px);
-  background-size: 44px 44px;
+    radial-gradient(46rem 30rem at 8% -10%, oklch(0.9 0.075 55 / 0.6), transparent 62%),
+    radial-gradient(40rem 26rem at 98% 2%, oklch(0.92 0.06 150 / 0.5), transparent 64%),
+    radial-gradient(44rem 30rem at 50% 115%, oklch(0.9 0.055 240 / 0.42), transparent 62%),
+    radial-gradient(oklch(0.285 0.028 55 / 0.05) 1px, transparent 1px);
+  background-size: auto, auto, auto, 22px 22px;
 }
 
+/* Friendly warm lift for primary CTAs and hero cards */
 .di-glow {
   box-shadow:
-    0 0 24px oklch(0.77 0.19 152 / 0.18),
-    0 0 64px oklch(0.77 0.19 152 / 0.08);
+    0 1px 2px oklch(0.285 0.028 55 / 0.05),
+    0 10px 30px oklch(0.665 0.19 41 / 0.22),
+    0 4px 12px oklch(0.665 0.19 41 / 0.1);
 }
 
 .di-text-glow {
-  text-shadow: 0 0 18px oklch(0.77 0.19 152 / 0.55);
+  text-shadow: 0 1px 0 oklch(0.998 0.003 90 / 0.6);
 }
 
+/* Former CRT scanline — now a gentle paper sheen on hero cards */
 .di-scanline::after {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: repeating-linear-gradient(
-    to bottom,
-    transparent 0px,
-    transparent 3px,
-    oklch(0 0 0 / 0.12) 4px
-  );
-  opacity: 0.35;
+  border-radius: inherit;
+  background: linear-gradient(to bottom, oklch(1 0 0 / 0.55), transparent 14%);
+  opacity: 0.6;
 }
 
 @keyframes di-blink {
@@ -175,7 +188,7 @@
   top: 0;
   bottom: 0;
   width: 40%;
-  background: linear-gradient(90deg, transparent, oklch(0.77 0.19 152 / 0.12), transparent);
+  background: linear-gradient(90deg, transparent, oklch(0.665 0.19 41 / 0.14), transparent);
   animation: di-sweep 2.4s ease-in-out infinite;
 }
 
@@ -188,9 +201,9 @@
   background: transparent;
 }
 .di-scroll::-webkit-scrollbar-thumb {
-  background: oklch(0.35 0.01 160);
+  background: oklch(0.285 0.028 55 / 0.18);
   border-radius: 999px;
 }
 .di-scroll::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.5 0.05 152);
+  background: oklch(0.665 0.19 41 / 0.4);
 }
