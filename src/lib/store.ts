@@ -140,6 +140,11 @@ interface DeepInitState {
   setBrain: (id: BrainId, on: boolean) => Promise<{ ok: boolean; error?: string }>;
   /** generates portal credentials + owner pairing token (wizard step 1) */
   ensureCredentials: () => void;
+  /** rotate portal credentials from the lock screen: mints a NEW username
+   *  (+ optional custom slug) and access token, replacing the old pair.
+   *  pairingToken is intentionally left untouched so the Telegram gateway
+   *  binding survives a credential rotation. */
+  regeneratePortalCredentials: (username?: string) => void;
   resetAll: () => void;
   setHydrated: () => void;
 }
@@ -337,6 +342,15 @@ export const useDeepInit = create<DeepInitState>()(
           if (!s.profile.pairingToken) patch.pairingToken = genPairingToken();
           return { profile: { ...s.profile, ...patch } };
         }),
+
+      regeneratePortalCredentials: (username) =>
+        set((s) => ({
+          profile: {
+            ...s.profile,
+            portalUser: slugifyUser(username || s.profile.displayName || "operator"),
+            portalToken: genPortalToken(),
+          },
+        })),
 
       resetAll: () =>
         set({
