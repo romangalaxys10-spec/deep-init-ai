@@ -20,7 +20,7 @@ export interface ReflexReply {
 }
 
 const OFFLINE_NOTE = [
-  "ℹ️ *Offline reflex mode* — the cloud demo brain isn't reachable from this deployment (no egress to the model endpoint). Init itself stays fully up: the Telegram gateway, tool execution, memory and pairing all keep running.",
+  "ℹ️ **Offline reflex mode** — the cloud demo brain isn't reachable from this deployment (no egress to the model endpoint). Init itself stays fully up: the Telegram gateway, tool execution, memory and pairing all keep running.",
   "",
   "For full LLM answers on this deployment, add your own provider key in the wizard (step 3) — OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Mistral, Ollama, anything OpenAI-compatible or Anthropic-native. Keys are BYOK: they live in your browser and are only used in-flight.",
 ].join("\n");
