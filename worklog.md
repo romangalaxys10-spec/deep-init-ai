@@ -115,3 +115,26 @@ Work Log:
 
 Stage Summary:
 - Any provider/model that leaks <function=...> syntax now gets its tools executed for real and users only ever see sanitized, natural answers — on web console, /api/chat and Telegram alike; internal-context narration is suppressed via guardrails and tool-round isolation.
+
+---
+Task ID: 6
+Agent: Super Z (main)
+Task: Hermes/OpenClaw parity (tools + telegram stream/render tech), agent presets gallery, full E2E verification with proof of work
+
+Work Log:
+- Research (web_search + page_reader): OpenClaw docs taxonomy (exec, image gen, music gen, PDF, TTS/Auto-TTS, memory wiki, automations/heartbeat, media intake, slash commands, skills); Hermes Agent (NousResearch) telegram docs + central COMMAND_REGISTRY; discovered Bot API 9.5 sendMessageDraft (Mar 2026, aiogram 3.31) — the primitive Hermes/OpenClaw stream through. Live probe: api.telegram.org RECOGNIZES sendMessageDraft (chat-not-found, not method-not-found) → real draft streaming available.
+- src/lib/tools.ts: tool registry expanded — image_search (SDK images.search), image_gen (SDK generations → Vercel Blob public URL, dev fallback public/generated), tts (SDK audio.tts → blob mp3), remember/recall (agent-scoped long-term memory), remind (ISO/relative time parser). ToolContext {agentKey, chatId} plumbed from gateway → brain → executors. TOOLS_MANUAL advertises the catalogue in guardrails: models call tools by emitting a tool-call block as the ENTIRE message → gateway executes → final answer (Hermes/OpenClaw loop).
+- agent-registry.ts: RegisteredAgent gains memory[]/reminders[]/presetId (hydrate defaults for old blobs), helpers rememberFact/searchMemory/addReminder/dueReminders/markRemindersDone, findAgentByOwner, allAgents, serializeForTest hook.
+- telegram.ts: (1) streaming upgraded to sendMessageDraft with automatic fallback to placeholder+editMessageText (per-message attempt, typing action until first tokens); (2) media intake — voice/audio notes → tgGetFileBytes → SDK ASR → text chat; photos → vision (SDK createVision) with graceful degradation message; (3) slash commands /help /status /reset (+unknown hint) handled pre-LLM; (4) media delivery — sendFormatted now extracts markdown images → sendPhoto, voice/audio URLs → sendVoice/sendAudio (multipart upload via tgMultipartSend); long code → sendDocument (previous session) unchanged; (5) contextLine now carries current UTC time + memory count + active preset (models need clock for remind); (6) flushDueReminders runs lazily on every chat update.
+- /api/cron + vercel.json: daily reminder flusher (hobby-safe schedule) + lazy flush covers active users; CRON_SECRET/x-vercel-cron auth.
+- Agent presets (Agentica-inspired): src/lib/presets.ts — 8 specialist modes (Chief of Staff, Research Analyst, Code Copilot, Content Manager, Doc Analyst, Video Director, Sales Operator, Personal Tutor) each with specialist system prompt, caps, starter prompts. presetPromptBlock layers onto buildSystemPrompt (new optional preset param). /api/agent/config updates gateway agent {presetId, systemPrompt} by ownerToken without re-pairing. store.ts: activePreset + activatePreset (logs activity, pushes merged prompt to gateway). presets-panel.tsx gallery (8 cards, activate/active states, needPair hint) + dashboard "presets" tab + console starters swap to active preset's list. i18n: tab.presets + 10 chrome keys + 16 preset name/tag keys in EN/RU/HE.
+- Fixed en route: replyAndRecord restored after handler rewrite; PutBody/BlobPart + createVision typing casts; unused vars removed; <tool_call> literal in guardrails (terminal display strips the tag — file content verified correct via python repr).
+
+Proof of work (all run this session):
+- npx tsc --noEmit → src/ clean; npx eslint src --max-warnings=0 → clean
+- Test suites: test-tools 30/30, test-telegram-format 17/17, test-attachments 29/29, test-parity 63/63 (NEW: presets×i18n, memory, reminders, guardrails catalogue, prompt injection), test-streaming-pipeline PASS, verify-senddocument multipart PASS (live API)
+- Browser E2E (agent-browser on dev :3000): clean-state wizard → pair builtin bot → skip brains → directives → sudo init --agent → dashboard directly (auth regression PASS); presets tab renders (8 cards); activated Code Copilot (button → "Active", store.activePreset="coder", gateway sync toast); console shows coder starters; sent starter → demo brain streamed → code card rendered with "Download code as file" (eval-captured a.download="snippet-2.js") + Copy; Hebrew switch → dir=rtl/lang=he, presets tab "פריסטים", cards "ראש מטה/אנליסט מחקר/קו-פיילוט קוד" translated; back to EN ltr. Screenshots: download/presets-console-proof.png, download/hebrew-rtl-proof.png.
+
+Stage Summary:
+- Telegram agent now matches the Hermes/OpenClaw capability class: draft streaming (Bot API 9.5) + edit fallback, voice in (ASR), photos in (vision), voice/images out (real media messages), files for long code, live web tools, memory, reminders + cron, slash commands.
+- Account-level agent presets shipped: 8 specialist modes, one-tap activate in the portal, synced to the gateway bot instantly.

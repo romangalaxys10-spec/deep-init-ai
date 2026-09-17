@@ -1,13 +1,16 @@
 import {
   agentsForBot,
   bindChat,
+  dueReminders,
   findBoundAgent,
   findByPairingToken,
+  markRemindersDone,
   pushThread,
   recordReply,
   refreshRegistry,
   touchAgent,
   type ChatMsg,
+  type ChatState,
   type RegisteredAgent,
   type TokenMatch,
 } from "./agent-registry";
@@ -21,6 +24,31 @@ import {
   splitTelegramHtml,
   type CodeFile,
 } from "./telegram-format";
+
+/* Media links produced by the image_gen / tts tools are converted into
+ * real Telegram media messages instead of raw URLs. */
+interface MediaRef {
+  url: string;
+  caption?: string;
+}
+
+function extractMediaLinks(md: string): {
+  text: string;
+  photos: MediaRef[];
+  audios: MediaRef[];
+} {
+  const photos: MediaRef[] = [];
+  const audios: MediaRef[] = [];
+  let text = md.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_m, alt, url) => {
+    photos.push({ url, caption: alt || undefined });
+    return "";
+  });
+  text = text.replace(/(?:🎙\s*)?(?:voice note|voice message|audio)\s*:\s*(https?:\/\/[^\s)]+)/gi, (_m, url) => {
+    audios.push({ url, caption: undefined });
+    return "";
+  });
+  return { text: text.replace(/\n{3,}/g, "\n\n").trim(), photos, audios };
+}
 
 /* ============================================================
  * Telegram gateway — real message handling for paired bots
@@ -89,6 +117,84 @@ export async function tgSendChatAction(token: string, chatId: number, action = "
   } catch {
     /* non-fatal */
   }
+}
+
+/* ---------------- media helpers (Hermes/OpenClaw-grade media delivery) ---------------- */
+
+/** Download a file from Telegram by file_id (≤20 MB Bot API limit). */
+export async function tgGetFileBytes(token: string, fileId: string): Promise<Buffer | null> {
+  try {
+    const meta = await tgCall<{ file_path?: string }>(token, "getFile", { file_id: fileId }, 15_000);
+    if (!meta.ok || !meta.result?.file_path) return null;
+    const url = `https://api.telegram.org/file/bot${token}/${meta.result.file_path}`;
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 25_000);
+    try {
+      const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      if (!res.ok) return null;
+      return Buffer.from(await res.arrayBuffer());
+    } finally {
+      clearTimeout(t);
+    }
+  } catch {
+    return null;
+  }
+}
+
+async function tgMultipartSend(
+  token: string,
+  method: string,
+  fileField: string,
+  bytes: Uint8Array,
+  filename: string,
+  extra: Record<string, string>
+): Promise<boolean> {
+  try {
+    const form = new FormData();
+    for (const [k, v] of Object.entries(extra)) form.append(k, v);
+    form.append(
+      fileField,
+      new Blob([bytes as unknown as BlobPart], { type: "application/octet-stream" }),
+      filename
+    );
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), TG_TIMEOUT_MS);
+    try {
+      const res = await fetch(tgUrl(token, method), { method: "POST", body: form, signal: controller.signal, cache: "no-store" });
+      return (await res.json() as { ok?: boolean }).ok === true;
+    } finally {
+      clearTimeout(t);
+    }
+  } catch {
+    return false;
+  }
+}
+
+export async function tgSendPhoto(token: string, chatId: number, url: string, caption?: string): Promise<boolean> {
+  try {
+    const r = await tgCall(token, "sendPhoto", {
+      chat_id: chatId,
+      photo: url,
+      ...(caption ? { caption: caption.slice(0, 1000) } : {}),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function tgSendVoiceBytes(token: string, chatId: number, bytes: Uint8Array, caption?: string): Promise<boolean> {
+  return tgMultipartSend(token, "sendVoice", "voice", bytes, "voice.ogg", {
+    chat_id: String(chatId),
+    ...(caption ? { caption: caption.slice(0, 1000) } : {}),
+  });
+}
+
+export async function tgSendAudioBytes(token: string, chatId: number, bytes: Uint8Array, title?: string): Promise<boolean> {
+  return tgMultipartSend(token, "sendAudio", "audio", bytes, "audio.mp3", {
+    chat_id: String(chatId),
+    ...(title ? { title: title.slice(0, 60) } : {}),
+  });
 }
 
 export async function tgSendMessage(token: string, chatId: number, text: string) {
@@ -168,7 +274,9 @@ const EDIT_MIN_NEW_CHARS = 48;
  * code-block rendering, fence-aware chunking and a plain-text fallback
  * when Telegram rejects the entities — formatting is never silently lost.
  * Long code walls never hit the chat: they are extracted and delivered
- * as real file documents right after the text.
+ * as real file documents right after the text. Media (generated images,
+ * voice notes) referenced in the reply are sent as real photo/audio/
+ * voice messages.
  */
 export async function sendFormatted(
   token: string,
@@ -177,7 +285,8 @@ export async function sendFormatted(
   editMessageId?: number
 ) {
   const { md: stripped, files } = extractFileAttachments(md);
-  const html = markdownToTelegramHTML(stripped);
+  const { text: mediaText, photos, audios } = extractMediaLinks(stripped);
+  const html = markdownToTelegramHTML(mediaText);
   const chunks = splitTelegramHtml(html);
   for (let i = 0; i < chunks.length; i++) {
     const useEdit = Boolean(editMessageId) && i === 0;
@@ -196,6 +305,32 @@ export async function sendFormatted(
       await tgCall(token, method, { ...base, text: plain, disable_web_page_preview: true });
     }
   }
+  for (const p of photos) {
+    const sent = await tgSendPhoto(token, chatId, p.url, p.caption);
+    if (!sent) {
+      await tgSendMessage(token, chatId, `🖼 ${p.caption || p.url}`);
+    }
+  }
+  for (const a of audios) {
+    let bytes: Buffer | null = null;
+    if (a.url.startsWith("http")) {
+      try {
+        const res = await fetch(a.url, { cache: "no-store" });
+        if (res.ok) bytes = Buffer.from(await res.arrayBuffer());
+      } catch {
+        bytes = null;
+      }
+    }
+    if (bytes) {
+      if (/\.ogg$/i.test(a.url)) {
+        await tgSendVoiceBytes(token, chatId, bytes, a.caption);
+      } else {
+        await tgSendAudioBytes(token, chatId, bytes, a.caption || "voice note");
+      }
+    } else if (a.url.startsWith("http")) {
+      await tgSendMessage(token, chatId, a.url);
+    }
+  }
   for (const file of files) {
     await tgSendDocument(token, chatId, file);
   }
@@ -208,15 +343,18 @@ interface StreamReplyResult {
 }
 
 /**
- * OpenClaw-style "preview streaming": a placeholder message is sent as soon
- * as the first tokens arrive, then editMessageText appends while the model
- * writes; the final edit swaps in fully formatted HTML (code blocks etc.).
- * A typing action is renewed every ~4s until the stream starts.
+ * Hermes/OpenClaw-grade streaming:
+ *  1. Bot API 9.5 sendMessageDraft when available (live animated draft —
+ *     the same primitive Hermes/OpenClaw stream through),
+ *  2. fallback: placeholder message + throttled editMessageText,
+ *  3. typing action renewed every ~4s until the first tokens land,
+ *  4. final edit/send swaps in fully formatted HTML + media + files.
  */
 async function streamReplyToChat(
   agent: RegisteredAgent,
   chatId: number,
-  messages: { role: "system" | "user" | "assistant"; content: string }[]
+  messages: { role: "system" | "user" | "assistant"; content: string }[],
+  toolCtx?: { agentKey?: string; chatId?: number }
 ): Promise<StreamReplyResult> {
   const token = agent.botToken;
 
@@ -227,50 +365,76 @@ async function streamReplyToChat(
     if (typing) clearInterval(typing);
   };
 
-  const st = { previewSent: false, messageId: 0, lastEditAt: 0, lastLen: 0 };
+  const st = {
+    previewSent: false,
+    draftMode: false,
+    draftTried: false,
+    messageId: 0,
+    lastEditAt: 0,
+    lastLen: 0,
+  };
 
   const result = await runAgentChainStreaming({
     providers: agent.providers,
     messages,
     allowDemoBrain: agent.allowDemoBrain,
+    toolCtx: toolCtx || { agentKey: agent.key, chatId },
     onEvent: (ev) => {
       if (ev.type !== "delta") return;
       const full = ev.text;
       if (!st.previewSent) {
-        // wait for a meaningful first fragment, then claim the message slot
+        // wait for a meaningful first fragment, then claim the stream surface
         if (full.trim().length < 30) return;
         st.previewSent = true;
         stopTyping();
-        void tgCall(token, "sendMessage", {
-          chat_id: chatId,
-          text: plainPreview(full, 1200),
-          disable_web_page_preview: true,
-        })
-          .then((r) => {
-            const id = (r.result as { message_id?: number } | undefined)?.message_id;
-            if (r.ok && typeof id === "number") st.messageId = id;
-          })
-          .catch(() => {});
+        if (!st.draftTried) {
+          st.draftTried = true;
+          void tgCall(token, "sendMessageDraft", { chat_id: chatId, text: plainPreview(full, 1200) }, 8_000)
+            .then((r) => {
+              if (r.ok) st.draftMode = true;
+              else void claimPlaceholder(full);
+            })
+            .catch(() => void claimPlaceholder(full));
+          return;
+        }
+        void claimPlaceholder(full);
         return;
       }
       const now = Date.now();
       if (
-        st.messageId &&
         now - st.lastEditAt >= EDIT_MIN_INTERVAL_MS &&
         full.length - st.lastLen >= EDIT_MIN_NEW_CHARS
       ) {
         st.lastEditAt = now;
         st.lastLen = full.length;
-        void tgCall(token, "editMessageText", {
-          chat_id: chatId,
-          message_id: st.messageId,
-          text: plainPreview(full) + " ▌",
-          disable_web_page_preview: true,
-        }).catch(() => {});
+        if (st.draftMode) {
+          void tgCall(token, "sendMessageDraft", { chat_id: chatId, text: plainPreview(full) + " ▌" }, 8_000).catch(() => {});
+        } else if (st.messageId) {
+          void tgCall(token, "editMessageText", {
+            chat_id: chatId,
+            message_id: st.messageId,
+            text: plainPreview(full) + " ▌",
+            disable_web_page_preview: true,
+          }).catch(() => {});
+        }
       }
     },
   });
   stopTyping();
+
+  async function claimPlaceholder(full: string) {
+    try {
+      const r = await tgCall(token, "sendMessage", {
+        chat_id: chatId,
+        text: plainPreview(full, 1200),
+        disable_web_page_preview: true,
+      });
+      const id = (r.result as { message_id?: number } | undefined)?.message_id;
+      if (r.ok && typeof id === "number") st.messageId = id;
+    } catch {
+      /* channel hiccup — final send still happens */
+    }
+  }
 
   if (!result.ok || !result.content) {
     const errText = `⚠ All brains failed to answer just now. Last error: ${
@@ -291,14 +455,31 @@ async function streamReplyToChat(
   return { text: reply, ok: true };
 }
 
+/** Minimal local shape of the SDK's vision body (its types are strict). */
+interface CreateChatCompletionVisionShape {
+  messages: unknown[];
+}
+
 /* ---------------- update handling ---------------- */
+
+export interface TelegramPhotoSize {
+  file_id: string;
+  width?: number;
+  height?: number;
+  file_size?: number;
+}
 
 export interface TelegramMessage {
   message_id: number;
   from?: { id: number; first_name?: string; username?: string };
   chat: { id: number; type: string; first_name?: string; title?: string };
   text?: string;
+  caption?: string;
   date: number;
+  voice?: { file_id: string; duration?: number; mime_type?: string };
+  audio?: { file_id: string; duration?: number; mime_type?: string; title?: string };
+  photo?: TelegramPhotoSize[];
+  document?: { file_id: string; file_name?: string; mime_type?: string };
 }
 
 export interface TelegramUpdate {
@@ -338,19 +519,187 @@ async function lookupWithRetry(botToken: string, token: string): Promise<TokenMa
 }
 
 function contextLine(agent: RegisteredAgent, mode: string, userName: string): string {
+  const now = new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  const base = `\n\n[Context: current time is ${now}. ${
+    agent.presetId ? `Active preset: ${agent.presetId}. ` : ""
+  }${(agent.memory?.length ?? 0) > 0 ? `You have ${agent.memory?.length} long-term memories (use recall).` : ""}]`;
   if (mode === "owner") {
-    return `\n\n[Context: you are chatting with ${agent.ownerName} — your owner and operator, via Telegram. This is the main shared thread.]`;
+    return `\n\n[Context: you are chatting with ${agent.ownerName} — your owner and operator, via Telegram. This is the main shared thread.]${base}`;
   }
   if (mode === "shared") {
-    return `\n\n[Context: you are chatting with ${userName} — a whitelisted user invited by ${agent.ownerName}. You share memory and context with ${agent.ownerName}'s main thread.]`;
+    return `\n\n[Context: you are chatting with ${userName} — a whitelisted user invited by ${agent.ownerName}. You share memory and context with ${agent.ownerName}'s main thread.]${base}`;
   }
-  return `\n\n[Context: you are chatting with ${userName} — a whitelisted user invited by ${agent.ownerName}. This conversation is ISOLATED: keep it self-contained and private to ${userName}.]`;
+  return `\n\n[Context: you are chatting with ${userName} — a whitelisted user invited by ${agent.ownerName}. This conversation is ISOLATED: keep it self-contained and private to ${userName}.]${base}`;
+}
+
+/* ---------------- media intake (voice → ASR, photo → vision) ---------------- */
+
+interface Intake {
+  text: string;
+  note?: string;
+}
+
+/** Transcribe an incoming Telegram voice/audio note via the built-in ASR. */
+async function transcribeTelegramVoice(
+  botToken: string,
+  msg: TelegramMessage
+): Promise<Intake | null> {
+  const fileId = msg.voice?.file_id || msg.audio?.file_id;
+  if (!fileId) return null;
+  const bytes = await tgGetFileBytes(botToken, fileId);
+  if (!bytes) return { text: "", note: "I couldn't download that voice note — please try again or type it." };
+  try {
+    const ZAI = (await import("z-ai-web-dev-sdk")).default;
+    const zai = await ZAI.create();
+    const r = (await zai.audio.asr.create({ file_base64: bytes.toString("base64") })) as
+      | { text?: string; result?: { text?: string } }
+      | string;
+    const text =
+      typeof r === "string"
+        ? r
+        : r.text || r.result?.text || "";
+    if (!text.trim()) {
+      return { text: "", note: "I couldn't make out the audio — could you type it?" };
+    }
+    return { text: text.trim(), note: `[voice note from ${msg.from?.first_name || "user"}]` };
+  } catch {
+    return {
+      text: "",
+      note: "Voice transcription is unavailable on this deployment — type your message and I'll take it from there.",
+    };
+  }
+}
+
+/** Describe an incoming photo: providers with vision first, built-in vision fallback. */
+async function describeTelegramPhoto(
+  botToken: string,
+  msg: TelegramMessage
+): Promise<Intake | null> {
+  const sizes = msg.photo || [];
+  if (!sizes.length) return null;
+  const largest = sizes.reduce((a, b) =>
+    (b.file_size || 0) > (a.file_size || 0) ? b : a
+  );
+  const bytes = await tgGetFileBytes(botToken, largest.file_id);
+  if (!bytes) return { text: msg.caption?.trim() || "", note: "I couldn't download that photo — try resending it." };
+  const dataUrl = `data:image/jpeg;base64,${bytes.toString("base64")}`;
+  const caption = msg.caption?.trim() || "Describe this image for me in detail.";
+  // 1) built-in vision (works where .z-ai-config exists)
+  try {
+    const ZAI = (await import("z-ai-web-dev-sdk")).default;
+    const zai = await ZAI.create();
+    const visionBody = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: dataUrl } },
+            { type: "text", text: caption },
+          ],
+        },
+      ],
+    };
+    const completion = await zai.chat.completions.createVision(
+      visionBody as unknown as Parameters<typeof zai.chat.completions.createVision>[0]
+    );
+    const anyRes = completion as {
+      choices?: { message?: { content?: string } }[];
+      content?: string;
+    };
+    const content = anyRes?.choices?.[0]?.message?.content ?? anyRes?.content ?? "";
+    if (typeof content === "string" && content.trim()) {
+      return {
+        text: `[photo attached] The image analysis says: ${content.trim().slice(0, 1200)}\n\nUser question/caption: ${caption}`,
+      };
+    }
+  } catch {
+    /* no built-in vision on this deployment */
+  }
+  return {
+    text: caption,
+    note: "Photo received — but image understanding isn't available on this deployment (no vision brain configured). Tell me what's in it and I'll help.",
+  };
 }
 
 async function replyAndRecord(agent: RegisteredAgent, chatId: number, text: string) {
   await tgSendMessage(agent.botToken, chatId, text);
   recordReply(agent, chatId, text);
   touchAgent(agent);
+}
+
+/** Deliver any reminders that came due, then mark them done. */
+async function flushDueReminders(agent: RegisteredAgent): Promise<void> {
+  const due = dueReminders(agent);
+  if (!due.length) return;
+  for (const r of due) {
+    const body = `⏰ *Reminder*: ${r.text}`;
+    await sendFormatted(agent.botToken, r.chatId, body).catch(() => undefined);
+  }
+  markRemindersDone(
+    agent,
+    due.map((r) => r.id)
+  );
+  touchAgent(agent);
+}
+
+/** Slash commands — Hermes-style central registry, handled before the LLM. */
+async function handleCommand(
+  agent: RegisteredAgent,
+  chat: ChatState,
+  text: string
+): Promise<UpdateOutcome | null> {
+  const cmd = text.split(/\s+/)[0].toLowerCase().replace(/@\w+$/, "");
+  if (cmd === "/reset") {
+    if (chat.mode === "isolated") chat.thread = [];
+    else agent.sharedThread = [];
+    await replyAndRecord(agent, chat.chatId, `Memory cleared for this thread (${chat.mode} context). Fresh start — what's next?`);
+    return { handled: "hint", replyPreview: "thread reset" };
+  }
+  if (cmd === "/help") {
+    await replyAndRecord(
+      agent,
+      chat.chatId,
+      [
+        `${agent.agentName} — your personal agent (Deep-init AI)`,
+        "",
+        "Just talk to me: ask questions, send tasks, paste text, forward links.",
+        "🎤 Voice notes → I transcribe and answer. 📷 Photos → I analyze them.",
+        "",
+        "Tools I can run: live web search, page reading, image search & generation, voice notes (TTS), long-term memory, scheduled reminders. Long code arrives as files.",
+        "",
+        "Commands:",
+        "/status — what I am and what's wired",
+        "/reset — clear this thread's memory",
+        "/help — this list",
+      ].join("\n"),
+    );
+    return { handled: "hint", replyPreview: "/help" };
+  }
+  if (cmd === "/status") {
+    const prov = agent.providers.length
+      ? agent.providers.map((p) => `${p.label || p.model}${p.model ? ` (${p.model})` : ""}`).join(", ")
+      : "built-in demo brain";
+    const pending = (agent.reminders ?? []).filter((r) => !r.done).length;
+    await replyAndRecord(
+      agent,
+      chat.chatId,
+      [
+        `⚙ ${agent.agentName} — status`,
+        `• Owner: ${agent.ownerName}`,
+        `• Your context: ${chat.mode}${agent.presetId ? ` • preset: ${agent.presetId}` : ""}`,
+        `• Brains: ${prov}`,
+        `• Tools: web_search, web_fetch, image_search, image_gen, tts, remember/recall, remind`,
+        `• Memory: ${(agent.memory ?? []).length} facts • Pending reminders: ${pending}`,
+        `• Deliverables: formatted markdown, code files, images, voice notes`,
+      ].join("\n"),
+    );
+    return { handled: "hint", replyPreview: "/status" };
+  }
+  if (cmd.startsWith("/")) {
+    await replyAndRecord(agent, chat.chatId, `Unknown command ${cmd}. Try /help — or just talk to me normally.`);
+    return { handled: "hint", replyPreview: cmd };
+  }
+  return null;
 }
 
 /**
@@ -362,12 +711,34 @@ export async function handleTelegramUpdate(
   botToken: string
 ): Promise<UpdateOutcome> {
   const msg = update.message || update.edited_message;
-  if (!msg?.text) return { handled: "ignored" };
+  if (!msg) return { handled: "ignored" };
 
   const chatId = msg.chat.id;
-  const firstName =
-    msg.from?.first_name || msg.from?.username || msg.chat.first_name || "friend";
-  const text = msg.text.trim();
+  let text = msg.text?.trim() || "";
+
+  /* 0) media intake — voice/audio → ASR, photo → vision (Hermes/OpenClaw parity) */
+  if (!text && (msg.voice || msg.audio)) {
+    const intake = await transcribeTelegramVoice(botToken, msg);
+    if (intake?.note && !intake.text) {
+      const nudge = findBoundAgent(botToken, chatId);
+      if (nudge) await replyAndRecord(nudge, chatId, intake.note);
+      return { handled: "hint", replyPreview: "voice intake failed" };
+    }
+    if (intake) {
+      text = [intake.note, intake.text].filter(Boolean).join(" ");
+    }
+  } else if (!text && msg.photo) {
+    const intake = await describeTelegramPhoto(botToken, msg);
+    if (!intake) return { handled: "ignored" };
+    if (intake.note && !intake.text) {
+      const nudge = findBoundAgent(botToken, chatId);
+      if (nudge) await replyAndRecord(nudge, chatId, intake.note);
+      return { handled: "hint", replyPreview: "photo intake failed" };
+    }
+    text = [intake.note, intake.text].filter(Boolean).join(" ");
+  } else if (!text) {
+    return { handled: "ignored" };
+  }
 
   /* 1) already-bound chat wins */
   let boundAgent = findBoundAgent(botToken, chatId);
@@ -420,7 +791,13 @@ export async function handleTelegramUpdate(
     return { handled: "hint", replyPreview: "needs pairing token" };
   }
 
-  /* 4) chat message — streamed live to the chat (preview streaming) */
+  /* 3b) slash commands — /help /status /reset */
+  if (boundAgent && boundChat && /^\/\w/.test(text)) {
+    const cmdOutcome = await handleCommand(boundAgent, boundChat, text);
+    if (cmdOutcome) return cmdOutcome;
+  }
+
+  /* 4) chat message — streamed live to the chat (draft streaming) */
   if (boundAgent && boundChat) {
     const agent = boundAgent;
     agent.lastSeen = Date.now();
@@ -437,11 +814,15 @@ export async function handleTelegramUpdate(
       ...thread,
     ];
 
-    const out = await streamReplyToChat(agent, chatId, messages);
+    const out = await streamReplyToChat(agent, chatId, messages, {
+      agentKey: agent.key,
+      chatId,
+    });
 
     pushThread(thread, { role: "assistant", content: out.text });
     recordReply(agent, chatId, out.text);
     touchAgent(agent);
+    await flushDueReminders(agent);
     return {
       handled: "chat",
       replyPreview: out.text.slice(0, 120),

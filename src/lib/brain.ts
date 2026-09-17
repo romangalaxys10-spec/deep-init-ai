@@ -5,6 +5,7 @@ import {
   extractToolCalls,
   sanitizeAgentText,
   sanitizeStreamText,
+  type ToolContext,
 } from "./tools";
 
 export const PROVIDER_TIMEOUT_MS = 45_000;
@@ -212,6 +213,8 @@ interface StreamOpts {
   messages: Msg[];
   allowDemoBrain?: boolean;
   onEvent?: (ev: StreamEvent) => void;
+  /** gateway context for agent-scoped tools (memory, reminders) */
+  toolCtx?: ToolContext;
 }
 
 /** Reads an SSE body and yields raw `data:` payload strings. */
@@ -545,7 +548,7 @@ export async function runAgentChainStreaming(opts: StreamOpts): Promise<ChainRes
     }
 
     // real tool execution, then a follow-up round with the results
-    const feedback = await executeToolCalls(calls);
+    const feedback = await executeToolCalls(calls, opts.toolCtx);
     prefix = visible ? `${visible}\n\n` : `${prefix}\n\n`;
     messages = [
       ...messages,
@@ -630,6 +633,7 @@ export async function runAgentChain(opts: {
   providers: ChatRequest["providers"];
   messages: Msg[];
   allowDemoBrain?: boolean;
+  toolCtx?: ToolContext;
 }): Promise<ChainResult> {
   const providers = (opts.providers || []).filter((p) => p && p.baseUrl && p.model).slice(0, 10);
   const fallbackChain: FallbackStep[] = [];
@@ -661,7 +665,7 @@ export async function runAgentChain(opts: {
     }
 
     // real tool execution, then a follow-up round with the results
-    const feedback = await executeToolCalls(calls);
+    const feedback = await executeToolCalls(calls, opts.toolCtx);
     messages = [
       ...messages,
       { role: "assistant", content: result.content },

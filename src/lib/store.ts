@@ -18,6 +18,8 @@ import type {
   WhitelistUser,
 } from "./types";
 import type { Lang } from "./i18n";
+import type { AgentPreset } from "./presets";
+import { getPreset, presetPromptBlock } from "./presets";
 import { genPairingToken, genPortalToken, slugifyUser } from "./tokens";
 
 export const BUILTIN_TOOLS: AgentTool[] = [
@@ -91,6 +93,8 @@ interface DeepInitState {
   whitelist: WhitelistUser[];
   /** UI language: en / ru / he (he flips the app to RTL) */
   uiLang: Lang;
+  /** activated agent preset (presets library), null = no preset */
+  activePreset: string | null;
 
   setView: (v: View) => void;
   setWizardStep: (s: number) => void;
@@ -125,6 +129,9 @@ interface DeepInitState {
   removeWhitelistUser: (id: string) => void;
   updateWhitelistUser: (id: string, patch: Partial<WhitelistUser>) => void;
   setUiLang: (l: Lang) => void;
+  /** activate/deactivate a preset: updates local state, the merged system
+   *  prompt and the server-side gateway agent (best-effort API push) */
+  activatePreset: (id: string | null) => Promise<{ ok: boolean; error?: string }>;
   /** generates portal credentials + owner pairing token (wizard step 1) */
   ensureCredentials: () => void;
   resetAll: () => void;
@@ -174,6 +181,7 @@ export const useDeepInit = create<DeepInitState>()(
       skills: BUILTIN_SKILLS,
       whitelist: [],
       uiLang: "en",
+      activePreset: null,
 
       setHydrated: () => set({ hydrated: true }),
       setView: (view) => set({ view }),
@@ -253,6 +261,43 @@ export const useDeepInit = create<DeepInitState>()(
 
       setUiLang: (l) => set({ uiLang: l }),
 
+      activatePreset: async (id) => {
+        const preset = getPreset(id);
+        if (id && !preset) return { ok: false, error: "Unknown preset" };
+        const s = get();
+        set({ activePreset: id });
+        const merged = buildSystemPrompt(
+          s.profile,
+          s.questionnaire,
+          s.channels,
+          s.tools,
+          s.instances,
+          s.tunnels,
+          s.skills,
+          preset ?? undefined
+        );
+        s.logActivity({
+          kind: "system",
+          title: preset ? `Preset activated: ${preset.emoji} ${id}` : "Preset deactivated — running base config",
+        });
+        const ownerToken = s.profile.pairingToken;
+        if (!ownerToken) return { ok: true }; // local-only until paired
+        try {
+          const res = await fetch("/api/agent/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ownerToken, presetId: id, systemPrompt: merged }),
+          });
+          const data = (await res.json()) as { ok?: boolean; error?: string };
+          if (!res.ok || !data.ok) {
+            return { ok: false, error: data.error || `HTTP ${res.status}` };
+          }
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      },
+
       ensureCredentials: () =>
         set((s) => {
           const patch: Partial<UserProfile> = {};
@@ -305,6 +350,7 @@ export const useDeepInit = create<DeepInitState>()(
         skills: s.skills,
         whitelist: s.whitelist,
         uiLang: s.uiLang,
+        activePreset: s.activePreset,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();
@@ -324,7 +370,8 @@ export function buildSystemPrompt(
   tools: AgentTool[],
   instances: SSHInstance[] = [],
   tunnels: TunnelMachine[] = [],
-  skills: AgentSkill[] = []
+  skills: AgentSkill[] = [],
+  preset?: AgentPreset
 ): string {
   const persona: Record<Questionnaire["personality"], string> = {
     concise: "Be concise and professional. Lead with the answer, then minimal supporting detail.",
@@ -387,6 +434,7 @@ export function buildSystemPrompt(
     `5. ANTI-STUCK: after 2 failed attempts on one approach, switch or race a genuinely different approach; never polish a dead idea. On success, distill a reusable 3-6 line workflow.`,
 
     q.notes ? `Personal context from the user: ${q.notes}` : "",
+    preset ? presetPromptBlock(preset.id) : "",
   ]
     .filter(Boolean)
     .join("\n");

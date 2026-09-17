@@ -57,6 +57,21 @@ export interface RegisteredAgent {
   /** conversation history shared by the owner + "shared" whitelist users */
   sharedThread: ChatMsg[];
   recentReplies: { at: number; chatId: number; preview: string }[];
+  /** durable long-term memory facts (remember/recall tools) */
+  memory?: { at: number; text: string }[];
+  /** scheduled proactive messages (remind tool) */
+  reminders?: Reminder[];
+  /** activated agent preset id (presets library) */
+  presetId?: string;
+}
+
+export interface Reminder {
+  id: string;
+  chatId: number;
+  text: string;
+  dueAt: number;
+  done: boolean;
+  createdAt: number;
 }
 
 const MAX_THREAD = 24;
@@ -153,9 +168,19 @@ function hydrate(raw: Record<string, SerializedAgent>): Map<string, RegisteredAg
   const map = new Map<string, RegisteredAgent>();
   for (const [k, s] of Object.entries(raw)) {
     const { chats, ...rest } = s;
-    map.set(k, { ...rest, chats: new Map(chats.map((c) => [c.chatId, c])) });
+    map.set(k, {
+      ...rest,
+      memory: Array.isArray(rest.memory) ? rest.memory : [],
+      reminders: Array.isArray(rest.reminders) ? rest.reminders : [],
+      chats: new Map(chats.map((c) => [c.chatId, c])),
+    });
   }
   return map;
+}
+
+/** Test hook: current in-memory state as JSON (scripts only). */
+export function serializeForTest(): Record<string, unknown> {
+  return JSON.parse(serialize(mem));
 }
 
 /* ---------------- refresh / persist ---------------- */
@@ -280,6 +305,9 @@ export function registerAgent(input: RegisterInput): RegisteredAgent {
     chats: prev?.chats ?? new Map(),
     sharedThread: prev?.sharedThread ?? [],
     recentReplies: prev?.recentReplies ?? [],
+    memory: prev?.memory ?? [],
+    reminders: prev?.reminders ?? [],
+    presetId: prev?.presetId,
   };
   mem.set(input.key, agent);
   return agent;
@@ -294,6 +322,11 @@ export function getAgent(key: string | null | undefined): RegisteredAgent | unde
 export function agentsForBot(botToken: string): RegisteredAgent[] {
   sweep();
   return [...mem.values()].filter((a) => a.botToken === botToken);
+}
+
+/** Snapshot of every registered agent (cron flusher, diagnostics). */
+export function allAgents(): RegisteredAgent[] {
+  return [...mem.values()];
 }
 
 /** The agent whose chat map already contains this chat (i.e. it was paired). */
@@ -320,6 +353,74 @@ export function findByPairingToken(botToken: string, token: string): TokenMatch 
     }
   }
   return undefined;
+}
+
+/** Finds any agent owned by the given pairing/owner token (config updates from the portal). */
+export function findAgentByOwner(ownerToken: string): RegisteredAgent | undefined {
+  const t = ownerToken.toUpperCase();
+  for (const a of mem.values()) {
+    if (a.ownerToken?.toUpperCase() === t) return a;
+  }
+  return undefined;
+}
+
+/* ---------------- long-term memory (remember/recall tools) ---------------- */
+
+const MAX_MEMORY = 100;
+
+export function rememberFact(agent: RegisteredAgent, text: string): void {
+  if (!agent.memory) agent.memory = [];
+  agent.memory.push({ at: Date.now(), text: text.slice(0, 400) });
+  if (agent.memory.length > MAX_MEMORY) agent.memory.splice(0, agent.memory.length - MAX_MEMORY);
+  agent.lastSeen = Date.now();
+}
+
+export function searchMemory(agent: RegisteredAgent, query?: string): { at: number; text: string }[] {
+  const mems = agent.memory ?? [];
+  if (!query?.trim()) return mems.slice(-8).reverse();
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return mems
+    .filter((m) => tokens.some((tk) => m.text.toLowerCase().includes(tk)))
+    .slice(-8)
+    .reverse();
+}
+
+/* ---------------- reminders (remind tool + cron flush) ---------------- */
+
+const MAX_REMINDERS = 50;
+
+export function addReminder(
+  agent: RegisteredAgent,
+  r: { chatId: number; text: string; dueAt: number }
+): Reminder {
+  if (!agent.reminders) agent.reminders = [];
+  const reminder: Reminder = {
+    id: `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
+    chatId: r.chatId,
+    text: r.text.slice(0, 400),
+    dueAt: r.dueAt,
+    done: false,
+    createdAt: Date.now(),
+  };
+  agent.reminders.push(reminder);
+  if (agent.reminders.length > MAX_REMINDERS) {
+    agent.reminders = agent.reminders.filter((x) => !x.done).slice(-MAX_REMINDERS);
+  }
+  agent.lastSeen = Date.now();
+  return reminder;
+}
+
+/** Due, not-yet-delivered reminders (dueAt <= now). */
+export function dueReminders(agent: RegisteredAgent, now = Date.now()): Reminder[] {
+  return (agent.reminders ?? []).filter((r) => !r.done && r.dueAt <= now);
+}
+
+export function markRemindersDone(agent: RegisteredAgent, ids: string[]): void {
+  if (!agent.reminders) return;
+  for (const r of agent.reminders) {
+    if (ids.includes(r.id)) r.done = true;
+  }
+  agent.lastSeen = Date.now();
 }
 
 export function bindChat(

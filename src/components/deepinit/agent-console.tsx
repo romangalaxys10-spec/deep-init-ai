@@ -9,13 +9,15 @@ import type { ChatMessage, FallbackStep } from "@/lib/types";
 import { AlertTriangle, CornerDownLeft, Loader2, Send, TerminalSquare, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RichText } from "./rich-text";
+import { getPreset } from "@/lib/presets";
 import { MonoLabel, StatusDot } from "./ui-bits";
 import { MicButton, VoiceControls, useSpeak } from "./voice";
 
-const SUGGESTIONS = ["cs.sug1", "cs.sug2", "cs.sug3", "cs.sug4"];
+const BASE_SUGGESTIONS = ["cs.sug1", "cs.sug2", "cs.sug3", "cs.sug4"];
 
 export function AgentConsole() {
   const t = useT();
+  const activePreset = useDeepInit((s) => s.activePreset);
   const messages = useDeepInit((s) => s.messages);
   const addMessage = useDeepInit((s) => s.addMessage);
   const updateMessage = useDeepInit((s) => s.updateMessage);
@@ -237,10 +239,13 @@ export function AgentConsole() {
               <p className="mt-1 max-w-sm text-sm text-muted-foreground">{t("cs.emptyBody")}</p>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
-              {SUGGESTIONS.map((s) => (
+              {(activePreset
+                ? (getPreset(activePreset)?.starters ?? BASE_SUGGESTIONS.map((k) => t(k)))
+                : BASE_SUGGESTIONS.map((k) => t(k))
+              ).map((s) => (
                 <button
                   key={s}
-                  onClick={() => send(t(s))}
+                  onClick={() => send(s)}
                   className="rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
                 >
                   {t(s)}

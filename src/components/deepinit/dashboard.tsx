@@ -26,6 +26,7 @@ import {
   MessagesSquare,
   MonitorSmartphone,
   RotateCcw,
+  Sparkles,
   TerminalSquare,
   Wrench,
 } from "lucide-react";
@@ -35,15 +36,25 @@ import { AgentConsole } from "./agent-console";
 import { BrainsPanel, ToolsPanel } from "./dashboard-panels";
 import { InstancesPanel } from "./instances-panel";
 import { GatewayPanel, WhitelistPanel } from "./channels-ops";
+import { PresetsPanel } from "./presets-panel";
 import { TelegramCard } from "./wizard";
 import { LangSwitch } from "./lang-switch";
 
-type Tab = "overview" | "console" | "channels" | "brains" | "tools" | "instances" | "activity";
+type Tab =
+  | "overview"
+  | "console"
+  | "channels"
+  | "presets"
+  | "brains"
+  | "tools"
+  | "instances"
+  | "activity";
 
 const TABS: { id: Tab; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "overview", icon: HeartPulse },
   { id: "console", icon: TerminalSquare },
   { id: "channels", icon: MessageCircle },
+  { id: "presets", icon: Sparkles },
   { id: "brains", icon: Cable },
   { id: "tools", icon: Wrench },
   { id: "instances", icon: MonitorSmartphone },
@@ -302,6 +313,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
 
         {tab === "console" && <AgentConsole />}
 
+        {tab === "presets" && <div className="di-fade-up"><PresetsPanel /></div>}
         {tab === "channels" && (
           <ChannelsTab />
         )}
