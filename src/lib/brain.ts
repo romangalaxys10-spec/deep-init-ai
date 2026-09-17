@@ -1,5 +1,6 @@
 import type { ChatRequest, FallbackStep } from "./types";
 import { getZAI } from "./zai";
+import { reflexReply } from "./reflex-brain";
 import { brainPromptBlock, type BrainConfig } from "./brains";
 import {
   AGENT_GUARDRAILS,
@@ -55,6 +56,8 @@ interface CallResult {
   content?: string;
   error?: string;
   latencyMs: number;
+  /** provenance override — e.g. "Deep-init demo brain (offline reflex)" */
+  via?: string;
 }
 
 async function callOpenAICompatible(
@@ -183,11 +186,14 @@ async function callDemoBrain(messages: Msg[]): Promise<CallResult> {
     }
     return { ok: true, content, latencyMs };
   } catch (e) {
-    return {
-      ok: false,
-      error: e instanceof Error ? e.message : String(e),
-      latencyMs: Date.now() - started,
-    };
+    /* Cloud demo tier unreachable (no egress / no credentials on this
+       deployment)? The agent NEVER goes mute — answer from the built-in
+       offline reflex engine instead of failing the whole chain. */
+    void e;
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    const userText = typeof lastUser?.content === "string" ? lastUser.content : "";
+    const reflex = reflexReply(userText);
+    return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started };
   }
 }
 
@@ -470,7 +476,7 @@ async function runChainOnceStreaming(
   if (allowDemoBrain !== false) {
     const demo = await callDemoBrainReplayed(messages, onEvent);
     fallbackChain.push({
-      provider: "Deep-init demo brain",
+      provider: demo.via || "Deep-init demo brain",
       model: "glm",
       ok: demo.ok,
       latencyMs: demo.latencyMs,
@@ -480,7 +486,7 @@ async function runChainOnceStreaming(
       return {
         ok: true,
         content: demo.content,
-        via: "Deep-init demo brain",
+        via: demo.via || "Deep-init demo brain",
         latencyMs: demo.latencyMs,
         fallbackChain,
       };
@@ -605,7 +611,7 @@ async function runChainOnce(
   if (allowDemoBrain !== false) {
     const demo = await callDemoBrain(messages);
     fallbackChain.push({
-      provider: "Deep-init demo brain",
+      provider: demo.via || "Deep-init demo brain",
       model: "glm",
       ok: demo.ok,
       latencyMs: demo.latencyMs,
@@ -615,7 +621,7 @@ async function runChainOnce(
       return {
         ok: true,
         content: demo.content,
-        via: "Deep-init demo brain",
+        via: demo.via || "Deep-init demo brain",
         latencyMs: demo.latencyMs,
         fallbackChain,
       };
