@@ -81,6 +81,63 @@ export interface ChatMessage {
   fallbackChain?: FallbackStep[];
 }
 
+/* ---------- Virtual instances ---------- */
+
+export interface SSHInstance {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  auth: "password" | "key";
+  password?: string;
+  privateKey?: string;
+  status: "untested" | "ok" | "error";
+  lastError?: string;
+  sysinfo?: { os?: string; whoami?: string; uptime?: string };
+  lastCheckedAt?: string;
+}
+
+export interface TunnelMachine {
+  id: string;
+  token: string;
+  name: string;
+  os: string;
+  status: "pending" | "online" | "stale";
+  lastSeen?: string;
+  hostname?: string;
+  uptime?: string;
+  sysinfo?: string;
+}
+
+export interface TunnelCommand {
+  id: string;
+  command: string;
+  status: "queued" | "done" | "error";
+  result?: string;
+  at: string;
+}
+
+/* ---------- Voice ---------- */
+
+export interface VoiceSettings {
+  enabled: boolean;
+  autoSpeak: boolean;
+  voice: string;
+  rate: number; // -50..50
+  pitch: number; // -50..50
+}
+
+/* ---------- Skills ---------- */
+
+export interface AgentSkill {
+  id: string;
+  name: string;
+  source: "zcode" | "builtin" | "self";
+  status: "armed" | "drafting";
+  detail: string;
+}
+
 export interface FallbackStep {
   provider: string;
   model: string;

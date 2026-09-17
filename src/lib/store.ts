@@ -4,11 +4,15 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type {
   ActivityEvent,
+  AgentSkill,
   AgentTool,
   AIProvider,
   ChatMessage,
   MessagingChannel,
   Questionnaire,
+  SSHInstance,
+  TunnelMachine,
+  VoiceSettings,
   UserProfile,
   View,
 } from "./types";
@@ -24,6 +28,46 @@ export const BUILTIN_TOOLS: AgentTool[] = [
   { id: "bi-vision", kind: "builtin", name: "Vision & Screenshots", enabled: false, status: "untested", detail: "Read screens, images and documents" },
 ];
 
+export const BUILTIN_SKILLS: AgentSkill[] = [
+  {
+    id: "sk-smart",
+    name: "zcode-smart-skill v2",
+    source: "zcode",
+    status: "armed",
+    detail: "GVS5H ledger orchestration: plan → adversarial test-spec → work → verify-by-running, approach racing after 2 fails, done only with green verification. Applied to every hard build task.",
+  },
+  {
+    id: "sk-pdf",
+    name: "pdf-extract",
+    source: "self",
+    status: "armed",
+    detail: "Self-created. Extracts tables and text from PDFs into clean markdown.",
+  },
+  {
+    id: "sk-inbox",
+    name: "inbox-triage",
+    source: "self",
+    status: "armed",
+    detail: "Self-created. Clusters unread mail by urgency and drafts replies.",
+  },
+  {
+    id: "sk-price",
+    name: "price-watch",
+    source: "self",
+    status: "drafting",
+    detail: "Self-creating. Polls product pages on paired machines and diffs prices.",
+  },
+];
+
+export const VOICE_PRESETS: { name: string; voice: string; persona: string }[] = [
+  { name: "Nova — calm chief-of-staff", voice: "en-US-AvaNeural", persona: "warm, unhurried, executive" },
+  { name: "Atlas — technical operator", voice: "en-US-GuyNeural", persona: "precise, dry, to the point" },
+  { name: "Aria — bright & quick", voice: "en-US-AriaNeural", persona: "energetic, upbeat" },
+  { name: "Sonia — warm British assistant", voice: "en-GB-SoniaNeural", persona: "polite, friendly" },
+  { name: "Eric — nordic calm", voice: "en-US-EricNeural", persona: "low, steady, reassuring" },
+  { name: "Michelle — no-nonsense exec", voice: "en-US-MichelleNeural", persona: "direct, confident" },
+];
+
 interface DeepInitState {
   hydrated: boolean;
   view: View;
@@ -37,6 +81,10 @@ interface DeepInitState {
   activatedAt?: string;
   messages: ChatMessage[];
   activity: ActivityEvent[];
+  instances: SSHInstance[];
+  tunnels: TunnelMachine[];
+  voice: VoiceSettings;
+  skills: AgentSkill[];
 
   setView: (v: View) => void;
   setWizardStep: (s: number) => void;
@@ -58,6 +106,15 @@ interface DeepInitState {
   updateMessage: (id: string, patch: Partial<ChatMessage>) => void;
   clearMessages: () => void;
   logActivity: (e: Omit<ActivityEvent, "id" | "at">) => void;
+  addInstance: (i: SSHInstance) => void;
+  updateInstance: (id: string, patch: Partial<SSHInstance>) => void;
+  removeInstance: (id: string) => void;
+  addTunnel: (t: TunnelMachine) => void;
+  updateTunnel: (id: string, patch: Partial<TunnelMachine>) => void;
+  removeTunnel: (id: string) => void;
+  setVoice: (v: Partial<VoiceSettings>) => void;
+  addSkill: (s: AgentSkill) => void;
+  updateSkill: (id: string, patch: Partial<AgentSkill>) => void;
   resetAll: () => void;
   setHydrated: () => void;
 }
@@ -72,6 +129,14 @@ const defaultQuestionnaire: Questionnaire = {
   customHours: "",
   language: "English",
   notes: "",
+};
+
+const defaultVoice: VoiceSettings = {
+  enabled: true,
+  autoSpeak: false,
+  voice: "en-US-AvaNeural",
+  rate: 0,
+  pitch: 0,
 };
 
 export const useDeepInit = create<DeepInitState>()(
@@ -89,6 +154,10 @@ export const useDeepInit = create<DeepInitState>()(
       activatedAt: undefined,
       messages: [],
       activity: [],
+      instances: [],
+      tunnels: [],
+      voice: defaultVoice,
+      skills: BUILTIN_SKILLS,
 
       setHydrated: () => set({ hydrated: true }),
       setView: (view) => set({ view }),
@@ -145,6 +214,21 @@ export const useDeepInit = create<DeepInitState>()(
           activity: [{ ...e, id: uid(), at: new Date().toISOString() }, ...s.activity].slice(0, 200),
         })),
 
+      addInstance: (i) => set((s) => ({ instances: [...s.instances, i] })),
+      updateInstance: (id, patch) =>
+        set((s) => ({ instances: s.instances.map((i) => (i.id === id ? { ...i, ...patch } : i)) })),
+      removeInstance: (id) => set((s) => ({ instances: s.instances.filter((i) => i.id !== id) })),
+
+      addTunnel: (t) => set((s) => ({ tunnels: [...s.tunnels.filter((x) => x.id !== t.id), t] })),
+      updateTunnel: (id, patch) =>
+        set((s) => ({ tunnels: s.tunnels.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
+      removeTunnel: (id) => set((s) => ({ tunnels: s.tunnels.filter((t) => t.id !== id) })),
+
+      setVoice: (v) => set((s) => ({ voice: { ...s.voice, ...v } })),
+      addSkill: (sk) => set((s) => ({ skills: [...s.skills, sk] })),
+      updateSkill: (id, patch) =>
+        set((s) => ({ skills: s.skills.map((sk) => (sk.id === id ? { ...sk, ...patch } : sk)) })),
+
       resetAll: () =>
         set({
           view: "landing",
@@ -158,6 +242,10 @@ export const useDeepInit = create<DeepInitState>()(
           activatedAt: undefined,
           messages: [],
           activity: [],
+          instances: [],
+          tunnels: [],
+          voice: defaultVoice,
+          skills: BUILTIN_SKILLS,
         }),
     }),
     {
@@ -175,6 +263,10 @@ export const useDeepInit = create<DeepInitState>()(
         activatedAt: s.activatedAt,
         messages: s.messages,
         activity: s.activity,
+        instances: s.instances,
+        tunnels: s.tunnels,
+        voice: s.voice,
+        skills: s.skills,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();
@@ -191,7 +283,10 @@ export function buildSystemPrompt(
   profile: UserProfile,
   q: Questionnaire,
   channels: MessagingChannel[],
-  tools: AgentTool[]
+  tools: AgentTool[],
+  instances: SSHInstance[] = [],
+  tunnels: TunnelMachine[] = [],
+  skills: AgentSkill[] = []
 ): string {
   const persona: Record<Questionnaire["personality"], string> = {
     concise: "Be concise and professional. Lead with the answer, then minimal supporting detail.",
@@ -214,6 +309,18 @@ export function buildSystemPrompt(
   const goals = q.goals.length ? q.goals.join(", ") : "general assistance";
   const connected = channels.filter((c) => c.status === "connected").map((c) => c.type).join(", ");
   const enabledTools = tools.filter((t) => t.enabled).map((t) => t.name).join(", ");
+  const onlineTunnels = tunnels.filter((t) => t.status === "online" || t.status === "stale");
+  const armedSkills = skills.filter((s) => s.status === "armed");
+
+  const instanceBlock = [
+    ...instances.map(
+      (i) =>
+        `- SSH "${i.name}" → ${i.username}@${i.host}:${i.port}${i.sysinfo?.os ? ` (${i.sysinfo.os.split(" ").slice(0, 3).join(" ")})` : ""}`
+    ),
+    ...onlineTunnels.map(
+      (t) => `- TUNNEL "${t.name}" → machine ${t.hostname || t.id} (${t.os}) — commands can be pushed through the pair tunnel`
+    ),
+  ].join("\n");
 
   return [
     `You are ${profile.agentName}, the personal autonomous agent of ${profile.displayName || "your user"}, running inside Deep-init AI.`,
@@ -225,8 +332,23 @@ export function buildSystemPrompt(
     `User timezone: ${profile.timezone}. Reply in ${q.language}.`,
     connected ? `Connected messengers: ${connected}.` : "",
     enabledTools ? `Enabled capability modules: ${enabledTools}.` : "",
+
+    instanceBlock
+      ? `VIRTUAL INSTANCES (machines you control):\n${instanceBlock}\nWhen a task exceeds your own cloud environment — user-local files, desktop apps, hardware, network-limited resources — route it to a paired machine over SSH or the pair tunnel, then report the results.`
+      : `No machines are paired yet. If a task needs one, tell the user to pair a machine from the Instances tab.`,
+
+    armedSkills.length
+      ? `SKILL REGISTRY (armed):\n${armedSkills.map((s) => `- ${s.name}: ${s.detail}`).join("\n")}\nApply these skills automatically when relevant; write and register new ones when a task needs a skill that doesn't exist yet.`
+      : "",
+
+    `BUILD PROTOCOL — zcode-smart-skill v2 (GVS5H), armed for every hard build/debug/design task:`,
+    `1. PLAN before code: restate the problem, acceptance criteria, and 3-6 independently verifiable tasks (tag each easy|medium|hard).`,
+    `2. ADVERSARIAL TEST-SPEC first for medium/hard tasks: write the edge-case and invariant tests the artifact must pass BEFORE implementing.`,
+    `3. WORK with handoff discipline: one task at a time, distinct approaches (not variations), self-attack: list 3 ways your solution could be wrong and check them.`,
+    `4. VERIFY by actually running the code/tests — a failed verify overrides any "done".`,
+    `5. ANTI-STUCK: after 2 failed attempts on one approach, switch or race a genuinely different approach; never polish a dead idea. On success, distill a reusable 3-6 line workflow.`,
+
     q.notes ? `Personal context from the user: ${q.notes}` : "",
-    `You can self-create new skills and register new MCP endpoints / APIs / plugins when a task needs them.`,
   ]
     .filter(Boolean)
     .join("\n");

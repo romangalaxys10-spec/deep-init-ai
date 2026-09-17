@@ -21,6 +21,7 @@ import {
   HeartPulse,
   MessageCircle,
   MessagesSquare,
+  MonitorSmartphone,
   RotateCcw,
   TerminalSquare,
   Wrench,
@@ -29,9 +30,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Logo, MonoLabel, Panel, StatusDot } from "./ui-bits";
 import { AgentConsole } from "./agent-console";
 import { BrainsPanel, ToolsPanel } from "./dashboard-panels";
+import { InstancesPanel } from "./instances-panel";
 import { TelegramCard, WhatsAppCard } from "./wizard";
 
-type Tab = "overview" | "console" | "channels" | "brains" | "tools" | "activity";
+type Tab = "overview" | "console" | "channels" | "brains" | "tools" | "instances" | "activity";
 
 const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "overview", label: "overview", icon: HeartPulse },
@@ -39,6 +41,7 @@ const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: st
   { id: "channels", label: "channels", icon: MessageCircle },
   { id: "brains", label: "brains", icon: Cable },
   { id: "tools", label: "tools · mcp", icon: Wrench },
+  { id: "instances", label: "instances", icon: MonitorSmartphone },
   { id: "activity", label: "activity", icon: Activity },
 ];
 
@@ -80,6 +83,9 @@ export function Dashboard() {
   const messages = useDeepInit((s) => s.messages);
   const activity = useDeepInit((s) => s.activity);
   const questionnaire = useDeepInit((s) => s.questionnaire);
+  const instances = useDeepInit((s) => s.instances);
+  const tunnels = useDeepInit((s) => s.tunnels);
+  const skills = useDeepInit((s) => s.skills);
   const activatedAt = useDeepInit((s) => s.activatedAt);
   const logActivity = useDeepInit((s) => s.logActivity);
   const addChannel = useDeepInit((s) => s.addChannel);
@@ -115,6 +121,7 @@ export function Dashboard() {
   );
   const connected = channels.filter((c) => c.status === "connected");
   const enabledTools = tools.filter((t) => t.enabled);
+  const machinesLinked = instances.length + tunnels.filter((t) => t.status !== "pending").length;
   const tasksHandled = Math.floor(messages.length / 2);
 
   const uptime = activatedAt ? fmtUptime(new Date(activatedAt).getTime(), now) : "—";
@@ -190,11 +197,12 @@ export function Dashboard() {
         {tab === "overview" && (
           <div className="di-fade-up space-y-4">
             {/* stat cards */}
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
               <StatCard icon={<Clock className="h-4 w-4 text-primary" />} label="uptime" value={uptime} sub={activatedAt ? `since ${new Date(activatedAt).toLocaleString()}` : undefined} />
               <StatCard icon={<MessageCircle className="h-4 w-4 text-primary" />} label="channels" value={`${connected.length}/2`} sub={connected.length ? connected.map((c) => c.handle || c.type).join(" · ") : "none paired"} />
               <StatCard icon={<Cable className="h-4 w-4 text-primary" />} label="fallback chain" value={`${enabledProviders.length} brain${enabledProviders.length === 1 ? "" : "s"}`} sub={enabledProviders.length ? `primary: ${enabledProviders[0].label}` : "demo brain"} />
               <StatCard icon={<Wrench className="h-4 w-4 text-primary" />} label="tools armed" value={`${enabledTools.length}/${tools.length}`} sub={`${cycles} loop cycles`} />
+              <StatCard icon={<MonitorSmartphone className="h-4 w-4 text-primary" />} label="machines linked" value={`${machinesLinked}`} sub={machinesLinked ? "ssh + tunnel" : "pair from instances tab"} />
             </div>
 
             {/* loop + quick actions */}
@@ -237,17 +245,28 @@ export function Dashboard() {
                     ))}
                   </div>
                 </Panel>
-                <Panel className="p-5">
-                  <MonoLabel>self-built skills</MonoLabel>
-                  <div className="mt-2 space-y-1.5 font-mono text-xs text-muted-foreground">
-                    <div className="flex justify-between"><span>pdf-extract</span><span className="text-primary">armed</span></div>
-                    <div className="flex justify-between"><span>inbox-triage</span><span className="text-primary">armed</span></div>
-                    <div className="flex justify-between"><span>price-watch</span><span className="text-amber-400">drafting</span></div>
-                  </div>
-                  <p className="mt-3 text-[11px] text-muted-foreground">
-                    The agent writes its own skills when a task needs one — this registry grows as it works.
-                  </p>
-                </Panel>
+              <Panel className="p-5">
+                <MonoLabel>skill registry</MonoLabel>
+                <div className="di-scroll mt-2 max-h-44 space-y-2 overflow-y-auto">
+                  {skills.map((sk) => (
+                    <div key={sk.id} className="rounded-lg border border-border/70 bg-background/40 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate font-mono text-xs text-foreground">{sk.name}</span>
+                        <span className={`shrink-0 font-mono text-[10px] ${sk.status === "armed" ? "text-primary" : "text-amber-400"}`}>
+                          {sk.status}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center gap-1.5">
+                        <span className="rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">{sk.source}</span>
+                        <span className="truncate text-[11px] text-muted-foreground">{sk.detail}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-[11px] text-muted-foreground">
+                  The agent builds with zcode-smart-skill v2 (GVS5H) and writes its own new skills whenever a task needs one.
+                </p>
+              </Panel>
               </div>
             </div>
           </div>
@@ -307,6 +326,7 @@ export function Dashboard() {
 
         {tab === "brains" && <div className="di-fade-up"><BrainsPanel /></div>}
         {tab === "tools" && <div className="di-fade-up"><ToolsPanel /></div>}
+        {tab === "instances" && <div className="di-fade-up"><InstancesPanel /></div>}
 
         {tab === "activity" && (
           <div className="di-fade-up">

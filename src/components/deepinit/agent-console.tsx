@@ -5,9 +5,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { buildSystemPrompt, uid, useDeepInit } from "@/lib/store";
 import type { ChatMessage } from "@/lib/types";
-import { AlertTriangle, CornerDownLeft, Loader2, Send, TerminalSquare } from "lucide-react";
+import { AlertTriangle, CornerDownLeft, Loader2, Send, TerminalSquare, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MonoLabel, StatusDot } from "./ui-bits";
+import { MicButton, VoiceControls, useSpeak } from "./voice";
 
 const SUGGESTIONS = [
   "What can you do for me?",
@@ -25,8 +26,13 @@ export function AgentConsole() {
   const channels = useDeepInit((s) => s.channels);
   const providers = useDeepInit((s) => s.providers);
   const tools = useDeepInit((s) => s.tools);
+  const instances = useDeepInit((s) => s.instances);
+  const tunnels = useDeepInit((s) => s.tunnels);
+  const skills = useDeepInit((s) => s.skills);
+  const voice = useDeepInit((s) => s.voice);
   const logActivity = useDeepInit((s) => s.logActivity);
   const { toast } = useToast();
+  const { speak, speakingId, stop } = useSpeak();
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -47,6 +53,17 @@ export function AgentConsole() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [visible.length, sending]);
 
+  // auto-speak new assistant replies
+  const lastSpokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!voice.enabled || !voice.autoSpeak) return;
+    const last = visible[visible.length - 1];
+    if (last && last.role === "assistant" && last.content && last.id !== lastSpokenRef.current) {
+      lastSpokenRef.current = last.id;
+      speak(last.content, last.id);
+    }
+  }, [visible, voice.enabled, voice.autoSpeak, speak]);
+
   const send = async (text?: string) => {
     const content = (text ?? input).trim();
     if (!content || sending) return;
@@ -61,7 +78,7 @@ export function AgentConsole() {
       .slice(-20)
       .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-    const system = buildSystemPrompt(profile, q, channels, tools);
+    const system = buildSystemPrompt(profile, q, channels, tools, instances, tunnels, skills);
 
     const placeholderId = uid();
     addMessage({
@@ -93,7 +110,7 @@ export function AgentConsole() {
         logActivity({
           kind: "message",
           title: `Task handled via ${data.via}`,
-          detail: `${data.latencyMs}ms${(data.fallbackChain || []).some((s: { ok: boolean }) => !s.ok) ? " · fallback engaged" : ""}`,
+          detail: `${data.latencyMs}ms${(data.fallbackChain || []).some((s: { ok: boolean }) => !s.ok) ? " · fallback engaged" : ""} · instances: ${instances.length + tunnels.filter((t) => t.status !== "pending").length}`,
         });
       } else {
         updateMessage(placeholderId, {
@@ -122,11 +139,19 @@ export function AgentConsole() {
           <TerminalSquare className="h-4 w-4 text-primary" />
           <MonoLabel>{profile.agentName} console</MonoLabel>
         </div>
-        <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-          <StatusDot ok />
-          {enabledProviders.length > 0
-            ? `${enabledProviders.length} brain${enabledProviders.length > 1 ? "s" : ""} armed`
-            : "demo brain"}
+        <div className="flex items-center gap-2">
+          <span className="hidden font-mono text-[11px] text-muted-foreground sm:inline">
+            {instances.length + tunnels.filter((t) => t.status !== "pending").length > 0
+              ? `${instances.length + tunnels.filter((t) => t.status !== "pending").length} machine(s) linked`
+              : "no machines linked"}
+          </span>
+          <span className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+            <StatusDot ok />
+            {enabledProviders.length > 0
+              ? `${enabledProviders.length} brain${enabledProviders.length > 1 ? "s" : ""} armed`
+              : "demo brain"}
+          </span>
+          <VoiceControls speak={speak} />
         </div>
       </div>
 
@@ -158,7 +183,14 @@ export function AgentConsole() {
         )}
 
         {visible.map((m) => (
-          <MessageBubble key={m.id} m={m} agentName={profile.agentName} />
+          <MessageBubble
+            key={m.id}
+            m={m}
+            agentName={profile.agentName}
+            onSpeak={voice.enabled ? () => speak(m.content, m.id) : undefined}
+            speaking={speakingId === m.id}
+            onStopSpeak={stop}
+          />
         ))}
         {sending && (
           <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
@@ -186,6 +218,7 @@ export function AgentConsole() {
             className="min-h-[52px] flex-1 resize-none border-0 bg-transparent text-sm shadow-none focus-visible:ring-0"
             rows={2}
           />
+          <MicButton onText={(t) => setInput((cur) => (cur ? `${cur} ${t}` : t))} />
           <Button onClick={() => send()} disabled={sending || !input.trim()} size="icon" className="mb-1 h-9 w-9 shrink-0" aria-label="Send">
             <Send className="h-4 w-4" />
           </Button>
@@ -198,7 +231,19 @@ export function AgentConsole() {
   );
 }
 
-function MessageBubble({ m, agentName }: { m: ChatMessage; agentName: string }) {
+function MessageBubble({
+  m,
+  agentName,
+  onSpeak,
+  speaking,
+  onStopSpeak,
+}: {
+  m: ChatMessage;
+  agentName: string;
+  onSpeak?: () => void;
+  speaking?: boolean;
+  onStopSpeak?: () => void;
+}) {
   const isUser = m.role === "user";
   const failedSteps = (m.fallbackChain || []).filter((s) => !s.ok);
 
@@ -230,6 +275,16 @@ function MessageBubble({ m, agentName }: { m: ChatMessage; agentName: string }) 
             <span className="inline-flex items-center gap-1 text-amber-400">
               <AlertTriangle className="h-3 w-3" /> fallback engaged ({failedSteps.map((f) => f.provider).join(", ")} failed)
             </span>
+          )}
+          {onSpeak && m.content && (
+            <button
+              onClick={speaking ? onStopSpeak : onSpeak}
+              className={`inline-flex items-center gap-1 transition-colors ${speaking ? "text-primary" : "hover:text-foreground"}`}
+              aria-label={speaking ? "Stop speaking" : "Speak reply"}
+            >
+              <Volume2 className="h-3 w-3" />
+              {speaking ? "stop" : "speak"}
+            </button>
           )}
         </div>
       </div>
