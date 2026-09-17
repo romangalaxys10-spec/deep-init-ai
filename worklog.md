@@ -75,3 +75,28 @@ Stage Summary:
 - All 3 user asks complete: (1) init→dashboard bug fixed & verified, (2) user/token login/re-login verified, (3) bright rene.co-inspired redesign live on production
 - Production: https://deep-init-ai.vercel.app (HTTP 200, bright theme, webhook armed for builtin bot)
 - Repo: https://github.com/romangalaxys10-spec/deep-init-ai (main @ 3c82f6c)
+
+---
+Task ID: 4
+Agent: Super Z (main)
+Task: Multi-lang UI (EN/RU/HE + RTL), Hermes/OpenClaw-grade streaming (Telegram + web console), code-block rendering, GitHub + Vercel publish. (Also: acknowledged the "tooling bug" — previous turn emitted fake web_search/web_fetch tool calls as text; this turn used the real web-search/page-reader skills.)
+
+Work Log:
+- Studied OpenClaw docs (docs.openclaw.ai/concepts/streaming) via page_reader: two-layer model = block streaming (emit completed blocks) + preview streaming (Telegram: send + editMessageText appends), chunkMode newline/length, textChunkLimit ~4000; known Hermes bug: markdown formatting silently lost on chunked messages → designed against it.
+- src/lib/telegram-format.ts: markdown→Telegram HTML (``` fences → <pre><code class="language-x">, inline code, **bold**, *italic*, links; full HTML escaping), fence-aware chunker that never silently mangles code (oversized blocks hard-split with reopened <pre> wrapper, entity-safe slicing), htmlToPlain + plainPreview.
+- src/lib/brain.ts: SSE streaming engine — callOpenAICompatibleStream (data: deltas) + callAnthropicStream (content_block_delta), non-SSE provider fallback (some providers ignore stream:true), demo brain delta-replay (12 slices), runAgentChainStreaming with same fallback order.
+- /api/chat: stream:true → NDJSON lines {provider_start|delta|done} (ReadableStream, no-store, X-Accel-Buffering:no).
+- src/lib/telegram.ts: streamReplyToChat — persistent typing (sendChatAction every 4.2s until first delta), first ≥30 chars claim a placeholder message, throttled editMessageText previews (≥1.6s, ≥48 new chars, "▌" cursor), final edit swaps in formatted HTML (chunk-aware, editMessageId), plain-text fallback on any HTML parse rejection; chat path now streams end-to-end (webhook + poll bridge share it).
+- src/components/deepinit/rich-text.tsx: RichText renderer — dark code cards (language label + copy button), inline code chips, bold, links; unterminated fences render as code (mid-stream safe).
+- agent-console.tsx: NDJSON reader (delta → live bubble update via updateMessage, "▊" cursor), legacy JSON fallback retained, message bubbles render RichText.
+- i18n: src/lib/i18n.ts (EN/RU/HE ~130 keys, {var} interpolation, EN fallback, useT hook); store uiLang (persisted, survives factory reset); LangSwitch pills (landing nav, wizard rail, portal login, dashboard header); page.tsx syncs document.documentElement.dir/lang (he → rtl); wired landing (hero/caps/steps/footer), portal-login (all strings + shadowing bug fix tok), boot, dashboard chrome (tabs/stats/panels/dialogs), console chrome + suggestions, wizard chrome (step rail, back/next, review).
+- Tests: scripts/test-telegram-format.ts (17/17 — incl. fence-aware split, entity-safe cuts, unterminated fence), scripts/test-streaming-pipeline.ts (monotonic deltas, chunk limits) — both PASS.
+- Fixed during build: unterminated-fence detection failed when text precedes the open fence (fenceCount parity check now); portal-login local `t` shadowed the useT hook → renamed to tok; agent-console ev type aligned to FallbackStep.
+- Verified (agent-browser, local): landing bright + LangSwitch; RU hero/CTA/panel translated; HE flips dir=rtl + full mirror; wizard E2E (pair built-in bot → skip providers → goals → sudo init --agent) lands straight in dashboard (auth-fix regression PASS); console streams demo-brain reply and renders dark code block; Lock → re-login roman/di_d64a6cc… PASS; curl /api/chat NDJSON: delta+done lines confirmed.
+- GitHub: pushed 6e45d2b → github.com/romangalaxys10-spec/deep-init-ai (main).
+- Vercel: prod deploy Ready (deep-init-76dkyscfm-ryzenadvanceds-projects.vercel.app → deep-init-ai.vercel.app HTTP 200); setWebhook re-armed for @init_smart_bot (5 pending updates will flow through the new streaming gateway); prod landing renders new UI (LangSwitch verified headless); /api/chat 502 with no providers on prod = expected BYOK/demo-brain-off-Vercel behavior.
+
+Stage Summary:
+- Init now streams like Hermes/OpenClaw: typing indicator → live preview edits in Telegram → final formatted HTML with real code blocks; same streaming in the web console with styled code cards.
+- UI is trilingual: English / Русский / עברית with true RTL for Hebrew, switchable from every surface.
+- Live: https://deep-init-ai.vercel.app · Repo: https://github.com/romangalaxys10-spec/deep-init-ai (main @ 6e45d2b)
