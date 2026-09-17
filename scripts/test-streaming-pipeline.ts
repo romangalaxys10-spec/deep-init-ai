@@ -12,7 +12,7 @@ async function main() {
     providers: [],
     allowDemoBrain: true,
     messages: [
-      { role: "user", content: "Reply with one short paragraph that includes a ```js fenced code block with console.log('hi')." },
+      { role: "user", content: "Reply with three detailed paragraphs (at least 400 words total) explaining what a personal AI agent is, and include a ```js fenced code block with console.log('hi')." },
     ],
     onEvent: (ev) => {
       if (ev.type === "delta") {

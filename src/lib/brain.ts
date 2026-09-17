@@ -1,8 +1,33 @@
 import type { ChatRequest, FallbackStep } from "./types";
+import {
+  AGENT_GUARDRAILS,
+  executeToolCalls,
+  extractToolCalls,
+  sanitizeAgentText,
+  sanitizeStreamText,
+} from "./tools";
 
 export const PROVIDER_TIMEOUT_MS = 45_000;
+/** how many tool-call rounds we run when a model leaks tool syntax as text */
+export const MAX_TOOL_ROUNDS = 2;
 
 type Msg = ChatRequest["messages"][number];
+
+/**
+ * Hardened system prompt: models behind custom providers sometimes narrate
+ * internal protocols or print raw tool-call syntax — these rules tell them
+ * to keep internal context internal. Appended once, at engine entry.
+ */
+function withGuardrails(messages: Msg[]): Msg[] {
+  const msgs = messages.map((m) => ({ ...m }));
+  const i = msgs.findIndex((m) => m.role === "system");
+  if (i >= 0) {
+    msgs[i] = { ...msgs[i], content: `${msgs[i].content}\n\n${AGENT_GUARDRAILS}` };
+  } else {
+    msgs.unshift({ role: "system", content: AGENT_GUARDRAILS });
+  }
+  return msgs;
+}
 
 function normalizeBase(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, "");
@@ -399,21 +424,21 @@ async function callDemoBrainReplayed(messages: Msg[], onEvent?: StreamOpts["onEv
   return demo;
 }
 
-/**
- * Streaming variant of runAgentChain: same fallback order, but the winning
- * provider's tokens flow through onEvent as they arrive. If a provider dies
- * mid-stream after emitting deltas, the partial answer is kept (flagged).
- */
-export async function runAgentChainStreaming(opts: StreamOpts): Promise<ChainResult> {
-  const providers = (opts.providers || []).filter((p) => p && p.baseUrl && p.model).slice(0, 10);
-  const fallbackChain: FallbackStep[] = [];
-
+/* One streaming pass through the provider chain (+ demo brain).
+   Appends diagnostics to fallbackChain; deltas flow through onEvent. */
+async function runChainOnceStreaming(
+  providers: StreamOpts["providers"],
+  messages: Msg[],
+  allowDemoBrain: boolean | undefined,
+  fallbackChain: FallbackStep[],
+  onEvent?: StreamOpts["onEvent"]
+): Promise<ChainResult> {
   for (const p of providers) {
-    opts.onEvent?.({ type: "provider_start", label: p.label || p.model, model: p.model });
+    onEvent?.({ type: "provider_start", label: p.label || p.model, model: p.model });
     const result =
       p.compat === "anthropic"
-        ? await callAnthropicStream(p.baseUrl, p.apiKey, p.model, opts.messages, opts.onEvent)
-        : await callOpenAICompatibleStream(p.baseUrl, p.apiKey, p.model, opts.messages, opts.onEvent);
+        ? await callAnthropicStream(p.baseUrl, p.apiKey, p.model, messages, onEvent)
+        : await callOpenAICompatibleStream(p.baseUrl, p.apiKey, p.model, messages, onEvent);
     fallbackChain.push({
       provider: p.label || p.model,
       model: p.model,
@@ -432,8 +457,8 @@ export async function runAgentChainStreaming(opts: StreamOpts): Promise<ChainRes
     }
   }
 
-  if (opts.allowDemoBrain !== false) {
-    const demo = await callDemoBrainReplayed(opts.messages, opts.onEvent);
+  if (allowDemoBrain !== false) {
+    const demo = await callDemoBrainReplayed(messages, onEvent);
     fallbackChain.push({
       provider: "Deep-init demo brain",
       model: "glm",
@@ -461,22 +486,94 @@ export async function runAgentChainStreaming(opts: StreamOpts): Promise<ChainRes
 }
 
 /**
- * Runs the provider fallback chain: tries each enabled provider in order,
- * then (optionally) the built-in demo brain. Returns the first success.
+ * Streaming variant of runAgentChain, Hermes/OpenClaw style: tokens flow
+ * through onEvent as they arrive, and if the model "leaks" tool-call syntax
+ * as text (<function=...> etc.) the tools are executed server-side and the
+ * model gets a follow-up round with the results. Viewers never see raw tool
+ * syntax — every emitted delta is sanitized, and the final content is the
+ * clean answer (intermediate tool-narration stays preview-only).
  */
-export async function runAgentChain(opts: {
-  providers: ChatRequest["providers"];
-  messages: Msg[];
-  allowDemoBrain?: boolean;
-}): Promise<ChainResult> {
+export async function runAgentChainStreaming(opts: StreamOpts): Promise<ChainResult> {
   const providers = (opts.providers || []).filter((p) => p && p.baseUrl && p.model).slice(0, 10);
   const fallbackChain: FallbackStep[] = [];
+  let messages = withGuardrails(opts.messages);
+  let prefix = ""; // visible text from completed tool rounds (preview-only)
 
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    const emit: StreamOpts["onEvent"] = (ev) => {
+      if (ev.type === "provider_start") {
+        opts.onEvent?.(ev);
+        return;
+      }
+      // never let tool syntax (complete or half-streamed) reach a viewer
+      opts.onEvent?.({ type: "delta", text: sanitizeStreamText(prefix + ev.text) });
+    };
+
+    const result = await runChainOnceStreaming(
+      providers,
+      messages,
+      opts.allowDemoBrain,
+      fallbackChain,
+      emit
+    );
+
+    if (!result.ok || !result.content) {
+      return {
+        ok: false,
+        fallbackChain,
+        error: result.error || "All providers failed",
+        latencyMs: fallbackChain.reduce((a, b) => a + (b.latencyMs || 0), 0),
+        ...(prefix.trim() ? { partial: true } : {}),
+      };
+    }
+
+    const { calls, cleaned } = extractToolCalls(result.content);
+    const visible = sanitizeAgentText(cleaned);
+
+    if (!calls.length || round === MAX_TOOL_ROUNDS) {
+      const content =
+        visible ||
+        prefix.trim() ||
+        "The agent executed tool calls but returned no text answer.";
+      return {
+        ok: true,
+        content,
+        via: result.via,
+        latencyMs: result.latencyMs,
+        fallbackChain,
+      };
+    }
+
+    // real tool execution, then a follow-up round with the results
+    const feedback = await executeToolCalls(calls);
+    prefix = visible ? `${visible}\n\n` : `${prefix}\n\n`;
+    messages = [
+      ...messages,
+      { role: "assistant", content: result.content },
+      { role: "user", content: feedback },
+    ];
+  }
+
+  return {
+    ok: false,
+    fallbackChain,
+    error: "All providers failed",
+    latencyMs: fallbackChain.reduce((a, b) => a + (b.latencyMs || 0), 0),
+  };
+}
+
+/* One classic (non-streaming) pass through the provider chain (+ demo brain). */
+async function runChainOnce(
+  providers: ChatRequest["providers"],
+  messages: Msg[],
+  allowDemoBrain: boolean | undefined,
+  fallbackChain: FallbackStep[]
+): Promise<ChainResult> {
   for (const p of providers) {
     const result =
       p.compat === "anthropic"
-        ? await callAnthropic(p.baseUrl, p.apiKey, p.model, opts.messages)
-        : await callOpenAICompatible(p.baseUrl, p.apiKey, p.model, opts.messages);
+        ? await callAnthropic(p.baseUrl, p.apiKey, p.model, messages)
+        : await callOpenAICompatible(p.baseUrl, p.apiKey, p.model, messages);
     fallbackChain.push({
       provider: p.label || p.model,
       model: p.model,
@@ -495,8 +592,8 @@ export async function runAgentChain(opts: {
     }
   }
 
-  if (opts.allowDemoBrain !== false) {
-    const demo = await callDemoBrain(opts.messages);
+  if (allowDemoBrain !== false) {
+    const demo = await callDemoBrain(messages);
     fallbackChain.push({
       provider: "Deep-init demo brain",
       model: "glm",
@@ -513,6 +610,63 @@ export async function runAgentChain(opts: {
         fallbackChain,
       };
     }
+  }
+
+  return {
+    ok: false,
+    fallbackChain,
+    error: "All providers failed",
+    latencyMs: fallbackChain.reduce((a, b) => a + (b.latencyMs || 0), 0),
+  };
+}
+
+/**
+ * Runs the provider fallback chain with tool-call defense: if the model
+ * leaks tool-call syntax as text, the tools are executed server-side and
+ * the model answers again with the results. The reply that reaches the
+ * user is always sanitized — raw <function=...> syntax can never leak.
+ */
+export async function runAgentChain(opts: {
+  providers: ChatRequest["providers"];
+  messages: Msg[];
+  allowDemoBrain?: boolean;
+}): Promise<ChainResult> {
+  const providers = (opts.providers || []).filter((p) => p && p.baseUrl && p.model).slice(0, 10);
+  const fallbackChain: FallbackStep[] = [];
+  let messages = withGuardrails(opts.messages);
+
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    const result = await runChainOnce(providers, messages, opts.allowDemoBrain, fallbackChain);
+
+    if (!result.ok || !result.content) {
+      return {
+        ok: false,
+        fallbackChain,
+        error: result.error || "All providers failed",
+        latencyMs: fallbackChain.reduce((a, b) => a + (b.latencyMs || 0), 0),
+      };
+    }
+
+    const { calls, cleaned } = extractToolCalls(result.content);
+    const visible = sanitizeAgentText(cleaned);
+
+    if (!calls.length || round === MAX_TOOL_ROUNDS) {
+      return {
+        ok: true,
+        content: visible || "The agent executed tool calls but returned no text answer.",
+        via: result.via,
+        latencyMs: result.latencyMs,
+        fallbackChain,
+      };
+    }
+
+    // real tool execution, then a follow-up round with the results
+    const feedback = await executeToolCalls(calls);
+    messages = [
+      ...messages,
+      { role: "assistant", content: result.content },
+      { role: "user", content: feedback },
+    ];
   }
 
   return {

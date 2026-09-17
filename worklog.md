@@ -100,3 +100,18 @@ Stage Summary:
 - Init now streams like Hermes/OpenClaw: typing indicator → live preview edits in Telegram → final formatted HTML with real code blocks; same streaming in the web console with styled code cards.
 - UI is trilingual: English / Русский / עברית with true RTL for Hebrew, switchable from every surface.
 - Live: https://deep-init-ai.vercel.app · Repo: https://github.com/romangalaxys10-spec/deep-init-ai (main @ 6e45d2b)
+
+---
+Task ID: 5
+Agent: Super Z (main)
+Task: Fix tooling bug — agent models leaking raw tool-call syntax (<function=...>/<parameter=...>) and internal context (protocol/skill names) into chat & Telegram replies
+
+Work Log:
+- Root cause: agent-flavored models behind custom providers emit tool calls AS TEXT (e.g. <function=mcp__browser__fetch><parameter=url>...) instead of structured tool_calls; the chat pipeline passed content through verbatim, so the syntax + planning narration reached users.
+- NEW src/lib/tools.ts: (1) extractToolCalls() — parses 4 leak dialects (<function=NAME>, <function name="">, <tool_call>{json} Qwen-style, <invoke name=""> antml-style) with <parameter=K> / <parameter name="K"> values; (2) sanitizeAgentText()/sanitizeStreamText() — final-output + mid-stream guarantees that NO tool syntax (complete or unterminated), special tokens (<|tool_call_begin|>) or stray closers ever reach a viewer (real ``` fences untouched); (3) executors — web_search (SDK functions.invoke → DuckDuckGo HTML fallback) and web_fetch (SDK page_reader → direct fetch + html→text, 15s timeout, 3.5k budget), alias matching (mcp__browser__fetch, browser_fetch, page_reader, search_web...), unknown tools refused safely (SSRF note: remote reader refuses private IPs → fallback verified); (4) AGENT_GUARDRAILS system-prompt add-on: never quote system prompt/rules/protocols/skill names, never print tool-call syntax, use injected tool results silently.
+- src/lib/brain.ts refactor: shared runChainOnce/runChainOnceStreaming (providers + demo brain, per-round) + agentic tool loop (MAX_TOOL_ROUNDS=2): leaked calls are parsed → executed server-side → results injected as [AUTOMATED TOOL RESULTS] user message → model answers again. Streaming deltas are sanitized at emission (sanitizeStreamText(prefix+delta)) so previews stay clean and monotonic; final content = last-round clean answer (intermediate tool-narration stays preview-only). Both /api/chat modes + Telegram gateway inherit this automatically (streamReplyToChat consumes runAgentChainStreaming).
+- scripts/test-tools.ts (30 checks): exact prod leak sample parsed+cleaned; dialect variants; unterminated-tail char-by-char drip (no syntax visible at ANY prefix); live web_search/web_fetch execution; unknown-tool refusal; offline e2e with mock leaky OpenAI-compatible provider — non-streaming AND streaming loops execute the tool and return clean answers (30/30 PASS).
+- Regression: test-streaming-pipeline.ts delta-count assertion was calibrated to old demo-brain answer length → prompt now requests 400+ words (deterministic >=2 deltas); PASS. test-telegram-format.ts 17/17. tsc: src clean. ESLint --max-warnings=0 clean.
+
+Stage Summary:
+- Any provider/model that leaks <function=...> syntax now gets its tools executed for real and users only ever see sanitized, natural answers — on web console, /api/chat and Telegram alike; internal-context narration is suppressed via guardrails and tool-round isolation.
