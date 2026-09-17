@@ -225,3 +225,21 @@ Stage Summary:
 - Double replies eliminated at two layers (surface-claim race + update ledger + instant webhook ack)
 - Deploy: deep-init-obc0bk428 (Ready), prod verified — landing 200, /api/voice/stt live transcription PASS, both voice e2e suites green against production
 - Commits: 2fb1067 (fix), 3795989 (test tooling) → origin/main
+
+---
+Task ID: newuser-option
+Agent: main (Super Z)
+Task: Portal lock screen must offer a choice — returning user sign-in OR generate a new user/token (user screenshot showed only the sign-in form)
+
+Work Log:
+- Read portal-login.tsx / page.tsx / store.ts: lock screen only had the returning-user form + a silent auto-mint escape hatch; no explicit way to mint a new user/token
+- store.ts: NEW regeneratePortalCredentials(username?) — rotates portalUser (slug-validated) + portalToken; pairingToken deliberately untouched so the Telegram gateway binding survives
+- portal-login.tsx: segmented mode selector (Returning user | New user / token) with role=tablist, active-tab highlight; new-mode panel = username input (prefilled with suggested slug, 3-24 char validation) → "Generate user & token" (450ms mint beat) → credentials-ready card with CopyFields for the pair → "Enter console"; returning mode = previous form + auto-mint card unchanged
+- i18n: 14 new pl.* keys × EN/RU/HE (tabReturn/tabNew/newTitle/newSub/newUserHint/generate/generating/newReady/newReadyBody/enter/newUserInvalid/newNote); scripts/check-i18n-parity.ts → 140 keys, EN=RU=HE
+- E2E scripts/e2e-newuser.mjs: seeds a locked dashboard, walks both modes, proves rotation (old token → "must match" error; new pair unlocks), Lock round-trip, Hebrew RTL — 18/18 on dev, 18/18 on https://deep-init-ai.vercel.app, 18/18 on https://deep-init.space-z.ai
+- Screenshot proof: download/newuser-mode-proof.png (new-user mode with minted credentials + Enter console)
+- Regression: tsc src/ clean, eslint src --max-warnings=0 clean, test-parity 63/63
+
+Stage Summary:
+- The lock screen now offers both paths: returning users sign in as before; anyone locked out (new device / lost token) can mint a brand-new user + token in one tap and walk straight into the console — no wizard, no factory reset, Telegram pairing intact
+- Commit 778d232 pushed to origin/main; Vercel prod deploy deep-init-20sswsh0l live (HTTP 200), all three surfaces verified 18/18
