@@ -243,3 +243,22 @@ Work Log:
 Stage Summary:
 - The lock screen now offers both paths: returning users sign in as before; anyone locked out (new device / lost token) can mint a brand-new user + token in one tap and walk straight into the console — no wizard, no factory reset, Telegram pairing intact
 - Commit 778d232 pushed to origin/main; Vercel prod deploy deep-init-20sswsh0l live (HTTP 200), all three surfaces verified 18/18
+
+---
+Task ID: nudge-retry
+Agent: main (Super Z)
+Task: Auto-retry to fix "The agent executed tool calls but returned no text answer." (reflex/demo mode, some messages)
+
+Work Log:
+- Root cause: the model (demo/cloud tier) spent its tool rounds emitting ONLY tool-call syntax (no user-visible text); at MAX_TOOL_ROUNDS=2 the engine gave up with the honest notice — and the cap round's pending tool calls were dropped unexecuted
+- brain.ts fix (both runAgentChain + runAgentChainStreaming):
+  - at the cap with no visible text: pending calls are now EXECUTED (results no longer dropped) and an explicit ANSWER_NUDGE ("TOOL PHASE OVER… plain text only") forces a final answer
+  - NUDGE_RETRIES=2 auto-retries; a nudged reply with any visible text wins (residual tool syntax treated as noise); streaming deltas stay sanitized and prefix text is preserved in the final content
+  - only after all retries fail does the notice return — bounded, no runaway loops
+  - NUDGE_MARKER lets callDemoBrain's reflex extraction skip synthetic nudge messages, so a retry that degrades to the offline reflex still answers the REAL question
+- Tests: NEW scripts/test-nudge-retry.ts 16/16 with a scripted tool-mute mock provider (recovery after nudge incl. request-count bounds 4/5, exhausted path, streaming recovery + delta sanitation, plain-text fast path 1 request, visible-at-cap unchanged)
+- Regression: brains 76/76, tools 30/30, telegram-format 17/17, attachments 29/29, parity 63/63, streaming PASS, dup-fix 10/10; tsc src clean; eslint --max-warnings=0 clean
+- Deploy: commits cd5a379 + 4d0bc49 → origin/main; prod deep-init-bym9lyy0h live — landing 200, chat round-trip verified (144/12 = 12 via offline reflex)
+
+Stage Summary:
+- Tool-mute replies now self-heal: the engine executes pending tool results, explicitly orders a plain-text answer, retries up to 2×, and only then falls back to the honest notice (or the reflex tier, which still sees the original question)
