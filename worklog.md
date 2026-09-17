@@ -262,3 +262,25 @@ Work Log:
 
 Stage Summary:
 - Tool-mute replies now self-heal: the engine executes pending tool results, explicitly orders a plain-text answer, retries up to 2×, and only then falls back to the honest notice (or the reflex tier, which still sees the original question)
+
+---
+Task ID: voiceout
+Agent: main (Super Z)
+Task: Telegram bot doesn't send voice messages — sends text with literal <tts> tags and CLAIMS it generated voice (screenshot). "Find creative architecture to solve it."
+
+Work Log:
+- Screenshot diagnosis: model hallucinated a <tts>…</tts> pseudo-protocol (leaked as literal text), narrated "voice message generated" without doing it; one 2s voice did arrive earlier
+- ROOT CAUSE 1 (tool broken): z-ai SDK audio.tts.create returns a raw Response object and the endpoint only accepts response_format "wav" (mp3 → HTTP 400 error 1214). runTts parsed neither → ALWAYS errored "provider returned no audio" → model still claimed success. Probed live: wav → 200 audio/wav RIFF. Fixed runTts in tools.ts (wav + Response.arrayBuffer + blob .wav)
+- ROOT CAUSE 2 (protocol depended on model cooperation). NEW deterministic VoiceOut architecture:
+  - src/lib/voice-out.ts: extractVoiceBlocks (parses <tts>/<voice>/<audio>/<speak>/<text_to_speech> blocks in any case, strips stray/unpaired tags — hallucinated protocols now COME TRUE, tags can never leak), mdToSpeechText (markdown → speakable prose: code fences → "(code block, N lines)", links → labels, images dropped, tables flattened, ~3.6k cap with pointer), synthesizeVoice (z-ai wav tier → keyless msedge-tts fallback — works even with dead cloud egress)
+  - telegram.ts deliverReply(): every reply passes through it — voice blocks → deliverVoiceNote (sendVoice bubble first, sendAudio fallback, failed synth re-joins as text), cleaned text via sendFormatted
+  - VOICE MIRROR per chat: ChatState.voiceOut auto|on|off (default auto, persisted via registry) — user speaks → agent talks back (plus text); "on" voices every reply; never double-speaks when explicit blocks exist
+  - /voice command cycles auto → always → off (help updated)
+  - guardrails rule 5: call the tts tool, never invent pseudo-tags
+  - extractMediaLinks now routes .wav/.mp3/.m4a through sendVoice-first too (was .ogg only → mp3 always landed as audio-player bubble)
+- Tests: scripts/test-voice-out.ts 23/23 — all tag dialects, stray tags, prod screenshot case reproduction, markdown-to-speech, live TTS chain (real bytes via zai-tts), /voice cycle
+- Regression: tools 30/30, telegram-format 17/17, brains 76/76, parity 63/63, dup-fix 10/10, streaming PASS; tsc src clean, eslint clean
+- Deploy: commit 7292e26 → origin/main; prod deep-init-oz2dp7lp3 live — landing 200, /api/voice/tts 200 (14.4KB audio)
+
+Stage Summary:
+- Voice delivery is now deterministic: any <tts>-style block becomes a real voice note, the tts tool actually works (wav), and voice-in gets voice-out automatically (auto mirror mode, /voice to change). Tags can never leak again.
