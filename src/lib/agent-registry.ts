@@ -311,10 +311,10 @@ export interface TokenMatch {
 export function findByPairingToken(botToken: string, token: string): TokenMatch | undefined {
   const t = token.toUpperCase();
   for (const a of agentsForBot(botToken)) {
-    if (a.ownerToken.toUpperCase() === t) {
+    if (a.ownerToken && a.ownerToken.toUpperCase() === t) {
       return { agent: a, mode: "owner", userName: a.ownerName };
     }
-    const wl = a.whitelist.find((w) => w.token.toUpperCase() === t);
+    const wl = a.whitelist.find((w) => w.token && w.token.toUpperCase() === t);
     if (wl) {
       return { agent: a, mode: wl.mode, userName: wl.name };
     }
