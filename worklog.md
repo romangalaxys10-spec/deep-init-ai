@@ -284,3 +284,22 @@ Work Log:
 
 Stage Summary:
 - Voice delivery is now deterministic: any <tts>-style block becomes a real voice note, the tts tool actually works (wav), and voice-in gets voice-out automatically (auto mirror mode, /voice to change). Tags can never leak again.
+
+---
+Task ID: voice-persona-picker
+Agent: main (Super Z)
+Task: Telegram voice messages stuck at the same Asian-female voice — make the Telegram voice picker work like the web interface's
+
+Work Log:
+- Root cause: synthesizeVoice() had NO voice parameter → the z-ai cloud TTS tier (fixed default voice = Asian female) won every note; the web picker's VOICE_PRESETS choice never left the browser (web uses /api/voice/tts with the voice param; gateway used none)
+- NEW src/lib/voice-personas.ts — "Voice Persona Passport": single catalog (the web console's 6 personas: Nova/Atlas/Aria/Sonia/Eric/Michelle) shared by the web popover (store.VOICE_PRESETS now derives from it), /api/voice/tts, the gateway registry and the Telegram picker; localeVoiceFor() keeps the persona's gender/style but swaps to a native voice for Cyrillic/Hebrew replies (ru-RU Svetlana/Dmitry, he-IL Hila/Avri — all verified live); personaVoicePlan() = pure, testable tier ordering
+- voice-out.ts: synthesizeVoice(text, {voiceId, rate, pitch}) — a known persona PINS the keyless Edge tier FIRST with that exact voice (z-ai demoted to reliability fallback — it cannot reproduce these voices and drowned every pick in its default); Edge synth gained rate/pitch pass-through and a 0-byte retry with fresh connection (rapid websocket opens returned empty streams under burst)
+- agent-registry.ts: agent.voiceId/voiceRate/voicePitch (account-level, synced from the web picker, preserved across re-pairing) + per-chat voiceId override (Telegram picker); bindChat preserves the override
+- telegram.ts: /voice and /voices now open an inline persona picker — 6 persona buttons (✅ marks the active one, same voices as the web console), "↩ Follow web console"/"🔹 Default voice" button and a mode row (auto/always/off, ✅ on current); NEW callback_query support end-to-end: TelegramUpdate.callback_query type, handleVoiceCallback (persona pick / default / mode pick → registry persist + answerCallbackQuery toast + picker re-render, unpaired-chat nudge, unknown-voice rejection), allowed_updates now ["message","callback_query"] in both tgSetWebhook and tgGetUpdates; voiceId plumbing: handleTelegramUpdate resolves chat override ?? agent voice → streamReplyToChat → deliverReply → every deliverVoiceNote (mirror + explicit <tts> blocks)
+- Portal→gateway sync: /api/agent/config accepts voiceId (validated, null clears)/voiceRate/voicePitch (clamped ±50) and echoes them; /api/pair/telegram + wizard.tsx + channels-ops.tsx carry the persona at pairing; store.setVoice pushes the picker choice to the gateway debounced (900ms, sliders fire rapidly)
+- Tests: NEW scripts/test-voice-picker.ts 48/48 — catalog parity, tier-plan (persona pins Edge), locale adaptation, LIVE persona synthesis proving via="edge-tts:en-US-GuyNeural" (and Russian counterpart for Cyrillic input), picker rendering (6 buttons + mode row + follow-web-console), callback handling (pick persists/toasts/re-renders, default reset, mode pick, unpaired nudge, unknown rejection), registry preservation across re-pairing/re-bind
+- Regression: brains 76/76, tools 30/30, telegram-format 17/17, attachments 29/29, nudge 16/16, voice-out 23/23, dup-fix 10/10, parity 63/63, i18n 140×3, streaming PASS; tsc src clean; eslint --max-warnings=0 clean
+- Deploy: commit e03f3f3 → origin/main; prod deep-init-dd1uikafs live — landing 200, /api/voice/tts returns real audio for ALL 6 personas; builtin bot webhook re-armed via setWebhook with allowed_updates ["message","callback_query"] (confirmed by getWebhookInfo) so picker taps reach the gateway without re-pairing
+
+Stage Summary:
+- The agent now sounds like the persona you pick — on BOTH surfaces, from ONE catalog: pick in the web console (auto-syncs to Telegram) or send /voice in the chat and tap a persona button; Russian/Hebrew replies automatically switch to a native voice of the same style instead of being mangled by an English one
