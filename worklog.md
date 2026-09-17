@@ -31,3 +31,27 @@ Stage Summary:
 - Verified features: provider fallback chain (real OpenAI 403 surfaced), real Telegram bot verify, edge-tts voice MP3s, SSH probe/exec error paths, full tunnel pair→command→result loop, wizard E2E (sandbox + prod), dashboard tabs E2E.
 - Constraints/notes: tunnel relay is per-node memory (swap relay.ts for Redis/Postgres in prod); demo brain only active where .z-ai-config exists (sandbox), Vercel users use their own providers; SSH/tunnel credentials stay in the browser, commands execute on user machines by design.
 - Artifacts: screenshots at /home/z/my-project/download/deep-init-dashboard.png, deep-init-console.png.
+
+---
+Task ID: 3
+Agent: Super Z (main agent)
+Task: Telegram bot fix (real answers), portal logins generated in wizard, Channel Pairing Token flow, whitelist (shared/isolated), built-in bot support, WhatsApp removal, GitHub publish, Vercel redeploy.
+
+Work Log:
+- Brain engine extracted to src/lib/brain.ts; /api/chat now a thin wrapper (same fallback chain reused by Telegram gateway).
+- src/lib/agent-registry.ts: server-side gateway registry (agent configs, per-chat binding owner/shared/isolated, threads, recent replies, getUpdates offset). Storage: Vercel Blob in production, .gateway/registry.json file in dev (cross-worker), memory fallback. Reads useCache:false (private blob GETs are edge-cached — the root cause of stale cross-instance state); persistRegistry re-reads + merges before write to avoid clobbering.
+- src/lib/telegram.ts: tg API helpers + handleTelegramUpdate — pairing-token binding (regex DIP-[23456789A-HJ-NP-Z]{4}-x2, ambiguous chars excluded), /start hints, chat handling with per-user context line, isolated vs shared threads, typing indicator, 3800-char message splitting, forced-refresh retry to heal blob eventual consistency.
+- Routes: /api/pair/telegram rewritten (builtin bot @init_smart_bot OR own bot via getMe; webhook on public origins, poll bridge + deleteWebhook on localhost; registers runtime config), /api/telegram/webhook (t=<botToken>|builtin, maxDuration 60), /api/telegram/poll (browser-driven getUpdates bridge), /api/telegram/status (bound chats/tokens/replies).
+- Wizard: credentials generated at step 1 (ensureCredentials → portalUser slug, portalToken di_+hex24, pairingToken DIP-XXXX-XXXX via src/lib/tokens.ts); step 2 Telegram-only with built-in/own toggle + CopyField token panel; review shows access credentials panel; WhatsAppCard + /api/pair/whatsapp removed; ChannelType = "telegram".
+- Portal gate: portal-login.tsx lock screen (username + token vs profile, sessionStorage di-portal-auth), page.tsx gate, dashboard Lock button (onLogout). Overview gained "portal access" panel with copy fields.
+- Channels tab: ChannelsTab (TelegramCard + GatewayPanel + WhitelistPanel in channels-ops.tsx). GatewayPanel: status poll 8s, resync (re-register config), poll bridge toggle 4s, auto-resync on mount/4min/when unregistered (60s throttle), window "di-resync" event. WhitelistPanel: add/remove users with per-user token + shared/isolated mode, owner token row with bound state.
+- Debugging prod: in-memory registry invisible across lambda instances → Vercel Blob store deep-init-gw (store_Vd1SwVKuaQUzWCzH) created + linked via CLI; ifMatch optimistic concurrency abandoned (spurious ETag mismatches under eventual consistency + SDK error name is generic "Error"); final design = useCache:false reads + merge-before-write. Added BLOB_STORE_ID + BUILTIN_TELEGRAM_BOT_TOKEN env vars (production). Temporary debug route used for diagnosis, then removed.
+- Demo brain (z-ai-web-dev-sdk) does not run on Vercel (missing .z-ai-config) — bot replies with honest "all brains failed" warning there; works in sandbox/local. Documented in README.
+- GitHub: repo romangalaxys10-spec/deep-init-ai created (public), main pushed (bfb092c → 4eb2d52), README with quickstart/architecture/security + attribution "Made using GLM 5.3 FLASH · By Roman | www.rommark.dev". Sandbox skills/ + examples/ gitignored.
+- Verified on production: pair → webhook bind owner → bind whitelisted (isolated) user → chat → brain reply → cross-instance status shows both chats; Telegram setWebhook points to /api/telegram/webhook?t=builtin; local sandbox E2E identical via localhost + poll bridge.
+
+Stage Summary:
+- Live: https://deep-init-ai.vercel.app · GitHub: https://github.com/romangalaxys10-spec/deep-init-ai
+- Telegram now actually answers: pairing token → Paired ✓ → provider-chain replies, shared/isolated whitelist, built-in + own bots, webhook (prod) / poll bridge (dev).
+- Portal logins minted in wizard gate the console; pairing tokens minted in wizard/channels gate the bot.
+- Known limits: demo brain only where .z-ai-config exists (configure a real provider on Vercel); registry TTL 24h + dashboard auto-resync heals cold starts; poll bridge only runs while a portal tab is open (webhook covers 24/7 on prod).
