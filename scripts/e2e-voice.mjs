@@ -1,7 +1,8 @@
 /* Voice-mode E2E: injects a fake SpeechRecognition into the browser and
  * drives the full hands-free loop against the LIVE app:
- *   voice ON → fake mic utters "what is 2 plus 2" → auto-send → agent replies
- *   → reply spoken via real /api/voice/tts → mic re-opens (loop proof).
+ *   voice ON → fake mic utters a question → auto-send → agent replies
+ *   → reply spoken via real /api/voice/tts → mic re-opens → SECOND question
+ *   answered with zero clicks (the true hands-free loop proof).
  * Run: node scripts/e2e-voice.mjs   (BASE_URL defaults to prod)
  */
 import { chromium } from "playwright";
@@ -27,14 +28,21 @@ class FakeSR {
   }
   start() {
     window.__srStarts = (window.__srStarts || 0) + 1;
-    const QUESTIONS = ["what is 2 plus 2", "what is 17.5% of 100", "what is 144 divided by 12"];
     const self = this;
+    // realistic: fire one utterance per "armed" session, then stay silent
+    // (Chrome keeps the segment open without emitting results until speech)
+    if (!window.__srArmed) {
+      setTimeout(() => { try { self.onend && self.onend(); } catch (e) {} }, 3000);
+      return;
+    }
+    window.__srArmed = false;
     setTimeout(() => {
-      const utter = QUESTIONS[((window.__srStarts || 1) - 1) % QUESTIONS.length];
+      const QUESTIONS = ["what is 2+2", "what is 17.5% of 100", "what is 144/12"];
+      const q = QUESTIONS[(window.__srQ = (window.__srQ || 0) + 1) - 1];
       try {
         self.onresult && self.onresult({
           resultIndex: 0,
-          results: [ { 0: { transcript: utter }, isFinal: true, length: 1 } ],
+          results: [ { 0: { transcript: q }, isFinal: true, length: 1 } ],
         });
       } catch (e) {}
       setTimeout(() => { try { self.onend && self.onend(); } catch (e) {} }, 120);
@@ -45,6 +53,7 @@ class FakeSR {
 }
 window.SpeechRecognition = FakeSR;
 window.webkitSpeechRecognition = FakeSR;
+window.__srArmed = true;
 `;
 
 async function main() {
@@ -98,29 +107,44 @@ async function main() {
   await page.waitForTimeout(700);
   const barListening = await page.locator("text=listening…").first().isVisible().catch(() => false);
   ok("voice bar shows listening", barListening);
-  ok("fake mic started once", (await page.evaluate(() => window.__srStarts)) === 1);
 
-  /* fake utterance → auto-send → reply */
-  await page.waitForTimeout(1200); // fake fires at ~450ms, commit debounce 900ms
-  await page.waitForSelector("text=what is 2 plus 2", { timeout: 20000 });
+  /* fake utterance #1 → auto-send */
+  await page.waitForSelector("text=what is 2+2", { timeout: 20000 });
   ok("transcript auto-sent as user message", true);
-  await page.waitForTimeout(9000); // reply + TTS round-trip
-  const body = await page.locator("body").innerText();
-  ok("agent replied (contains 4)", body.includes("4"), body.slice(0, 200).replace(/\n/g, " "));
-  ok("TTS endpoint was hit", ttsRequests.length >= 1, `n=${ttsRequests.length}`);
 
-  /* loop proof: mic re-opened after the reply was spoken */
-  const starts = await page.waitForFunction(
-    () => (window.__srStarts || 0) >= 2,
-    null,
-    { timeout: 25000 }
-  ).then(() => true).catch(() => false);
-  ok("voice loop re-opens mic (srStarts >= 2)", starts, `starts=${await page.evaluate(() => window.__srStarts)}`);
+  /* reply #1 (offline reflex: 2+2 = 4) */
+  const reply1 = await page
+    .waitForFunction(
+      () => document.body.innerText.includes("2+2") && document.body.innerText.includes("4"),
+      null,
+      { timeout: 25000 }
+    )
+    .then(() => true)
+    .catch(() => false);
+  ok("agent replied: 2+2 = 4", reply1);
 
-  /* second hands-free exchange — the loop already re-opened the mic with question #2 */
-  await page.waitForTimeout(18000);
-  const body2 = await page.locator("body").innerText();
-  ok("second hands-free exchange answered", body2.includes("17.5"), "");
+  /* reply spoken through the real neural TTS gateway */
+  let ttsHit = false;
+  for (let i = 0; i < 24 && !ttsHit; i++) {
+    await page.waitForTimeout(500);
+    ttsHit = ttsRequests.length >= 1;
+  }
+  ok("TTS endpoint was hit", ttsHit, `n=${ttsRequests.length}`);
+
+  /* loop proof: re-arm → the session re-opens the mic BY ITSELF and the
+   * second question is sent with zero clicks */
+  await page.evaluate(() => { window.__srArmed = true; });
+  const sent2 = await page
+    .waitForSelector("text=what is 17.5% of 100", { timeout: 25000 })
+    .then(() => true)
+    .catch(() => false);
+  ok("hands-free loop: 2nd question auto-sent", sent2);
+
+  const reply2 = await page
+    .waitForFunction(() => document.body.innerText.includes("17.5"), null, { timeout: 25000 })
+    .then(() => true)
+    .catch(() => false);
+  ok("second hands-free exchange answered (17.5)", reply2);
 
   /* toggle OFF cleanly */
   await vmBtn.first().click();

@@ -168,33 +168,57 @@ async function callAnthropic(
   }
 }
 
+/** How long the cloud demo tier may think before the offline reflex takes over.
+ *  On deployments with no egress to the model endpoint the cloud call hangs in
+ *  TCP-connect for ~10s — unacceptable for chat/voice UX, so we race it. */
+const DEMO_CLOUD_TIMEOUT_MS = 4500;
+
 async function callDemoBrain(messages: Msg[]): Promise<CallResult> {
   const started = Date.now();
-  try {
-    const zai = await getZAI();
-    const completion = await zai.chat.completions.create({
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    });
-    const latencyMs = Date.now() - started;
-    const anyRes = completion as {
-      choices?: { message?: { content?: string } }[];
-      content?: string;
-    };
-    const content = anyRes?.choices?.[0]?.message?.content ?? anyRes?.content ?? "";
-    if (typeof content !== "string" || !content.length) {
-      return { ok: false, error: "Demo brain returned empty response", latencyMs };
+
+  const cloud = (async (): Promise<CallResult> => {
+    try {
+      const zai = await getZAI();
+      const completion = await zai.chat.completions.create({
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      });
+      const latencyMs = Date.now() - started;
+      const anyRes = completion as {
+        choices?: { message?: { content?: string } }[];
+        content?: string;
+      };
+      const content = anyRes?.choices?.[0]?.message?.content ?? anyRes?.content ?? "";
+      if (typeof content !== "string" || !content.length) {
+        return { ok: false, error: "Demo brain returned empty response", latencyMs };
+      }
+      return { ok: true, content, latencyMs };
+    } catch (e) {
+      /* Cloud demo tier unreachable (no egress / no credentials)? */
+      void e;
+      return { ok: false, error: e instanceof Error ? e.message : String(e), latencyMs: Date.now() - started };
     }
-    return { ok: true, content, latencyMs };
-  } catch (e) {
-    /* Cloud demo tier unreachable (no egress / no credentials on this
-       deployment)? The agent NEVER goes mute — answer from the built-in
-       offline reflex engine instead of failing the whole chain. */
-    void e;
+  })();
+
+  const timer = new Promise<"timeout">((resolve) =>
+    setTimeout(() => resolve("timeout"), DEMO_CLOUD_TIMEOUT_MS)
+  );
+
+  const winner = await Promise.race([cloud, timer]);
+  if (winner === "timeout") {
+    /* Cloud tier too slow or unreachable — the agent NEVER goes mute and
+       never leaves the user hanging: answer from the offline reflex now. */
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     const userText = typeof lastUser?.content === "string" ? lastUser.content : "";
     const reflex = reflexReply(userText);
     return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started };
   }
+  if (winner.ok) return winner;
+
+  /* cloud answered quickly but failed → reflex */
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const userText = typeof lastUser?.content === "string" ? lastUser.content : "";
+  const reflex = reflexReply(userText);
+  return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started };
 }
 
 export interface ChainResult {
