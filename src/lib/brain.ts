@@ -18,8 +18,11 @@ export const MAX_TOOL_ROUNDS = 2;
 export const NO_TEXT_ANSWER = "The agent executed tool calls but returned no text answer.";
 /** Extra "stop calling tools, answer in words" retries before the notice. */
 export const NUDGE_RETRIES = 2;
+/** Marker embedded in every nudge — lets callDemoBrain's reflex extraction
+ *  skip synthetic user messages and keep seeing the real question. */
+export const NUDGE_MARKER = "TOOL PHASE OVER";
 const ANSWER_NUDGE =
-  "TOOL PHASE OVER. Using the tool results above (or your own knowledge if there are none), write the final answer to the user NOW. Plain text only — no tool calls, no <function=…> blocks, no ```tool_call fences, no internal protocol narration. If the results were insufficient, say so in one short sentence.";
+  `${NUDGE_MARKER}. Using the tool results above (or your own knowledge if there are none), write the final answer to the user NOW. Plain text only — no tool calls, no <function=…> blocks, no \`\`\`tool_call fences, no internal protocol narration. If the results were insufficient, say so in one short sentence.`;
 
 type Msg = ChatRequest["messages"][number];
 
@@ -213,7 +216,9 @@ async function callDemoBrain(messages: Msg[]): Promise<CallResult> {
   if (winner === "timeout") {
     /* Cloud tier too slow or unreachable — the agent NEVER goes mute and
        never leaves the user hanging: answer from the offline reflex now. */
-    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    const lastUser = [...messages]
+      .reverse()
+      .find((m) => m.role === "user" && !m.content.includes(NUDGE_MARKER));
     const userText = typeof lastUser?.content === "string" ? lastUser.content : "";
     const reflex = reflexReply(userText);
     return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started };
@@ -221,7 +226,9 @@ async function callDemoBrain(messages: Msg[]): Promise<CallResult> {
   if (winner.ok) return winner;
 
   /* cloud answered quickly but failed → reflex */
-  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const lastUser = [...messages]
+    .reverse()
+    .find((m) => m.role === "user" && !m.content.includes(NUDGE_MARKER));
   const userText = typeof lastUser?.content === "string" ? lastUser.content : "";
   const reflex = reflexReply(userText);
   return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started };
