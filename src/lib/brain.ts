@@ -184,6 +184,26 @@ async function callAnthropic(
  *  On deployments with no egress to the model endpoint the cloud call hangs in
  *  TCP-connect for ~10s — unacceptable for chat/voice UX, so we race it. */
 const DEMO_CLOUD_TIMEOUT_MS = 4500;
+/** When the cloud tier is KNOWN reachable but slow (cross-region GLM), a real
+ *  answer is worth waiting for — this is the health-aware deadline. */
+const DEMO_CLOUD_SLOW_OK_MS = 25_000;
+const CLOUD_HEALTH_TTL_MS = 5 * 60_000;
+
+/** Per-instance demo-cloud health: "alive" = a call eventually completed
+ *  (maybe after the race window) → give the next calls a fair deadline;
+ *  "dead" = a call eventually failed fast → reflex immediately next time. */
+let cloudHealth: { state: "alive" | "dead"; at: number } | null = null;
+
+function cloudDeadline(): number {
+  if (cloudHealth?.state === "alive" && Date.now() - cloudHealth.at < CLOUD_HEALTH_TTL_MS) {
+    return DEMO_CLOUD_SLOW_OK_MS;
+  }
+  return DEMO_CLOUD_TIMEOUT_MS;
+}
+
+function noteCloudHealth(state: "alive" | "dead") {
+  cloudHealth = { state, at: Date.now() };
+}
 
 /**
  * The LAST real user turn + the tool results gathered for it.
@@ -238,7 +258,7 @@ async function callDemoBrain(messages: Msg[], reflexCtx?: { hasProviders?: boole
   })();
 
   const timer = new Promise<"timeout">((resolve) =>
-    setTimeout(() => resolve("timeout"), DEMO_CLOUD_TIMEOUT_MS)
+    setTimeout(() => resolve("timeout"), cloudDeadline())
   );
 
   const reflexFrom = () => {
@@ -252,13 +272,15 @@ async function callDemoBrain(messages: Msg[], reflexCtx?: { hasProviders?: boole
   };
 
   /** Surface WHY the cloud tier lost — never block the answer on it.
-   *  Reachability diagnosis (unreachable endpoint vs slow model) lands in
-   *  the fallback chain instead of vanishing into a timeout. */
+   *  The eventual outcome also feeds cloudHealth: slow-but-alive calls earn
+   *  a longer race window next time; fast failures get instant reflexes. */
   const diagnose = async (): Promise<NonNullable<CallResult["cloudAttempt"]>> => {
     try {
       const r = await cloud;
+      noteCloudHealth(r.ok ? "alive" : "dead");
       return { ok: r.ok, error: r.error, latencyMs: r.latencyMs };
     } catch (e) {
+      noteCloudHealth("dead");
       return { ok: false, error: e instanceof Error ? e.message : String(e), latencyMs: Date.now() - started };
     }
   };
@@ -272,15 +294,21 @@ async function callDemoBrain(messages: Msg[], reflexCtx?: { hasProviders?: boole
        outcome is logged in the background for reachability diagnosis. */
     void diagnose().then((d) => {
       if (!d.ok) {
-        console.error(`[demo-brain:cloud] covered by reflex after ${DEMO_CLOUD_TIMEOUT_MS}ms — cloud outcome: ${d.error} (${d.latencyMs}ms)`);
+        console.error(`[demo-brain:cloud] covered by reflex — cloud outcome: ${d.error} (${d.latencyMs}ms)`);
+      } else {
+        console.error(`[demo-brain:cloud] answered AFTER the race window (${d.latencyMs}ms) — next calls get the slow-ok deadline`);
       }
     });
     const reflex = reflexFrom();
-    return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started, cloudAttempt: { ok: false, error: "cloud exceeded the reflex race window", latencyMs: DEMO_CLOUD_TIMEOUT_MS } };
+    return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started, cloudAttempt: { ok: false, error: "cloud exceeded the reflex race window (diagnosed in background)", latencyMs: DEMO_CLOUD_TIMEOUT_MS } };
   }
-  if (winner.ok) return winner;
+  if (winner.ok) {
+    noteCloudHealth("alive");
+    return winner;
+  }
 
   /* cloud answered quickly but failed → reflex */
+  noteCloudHealth("dead");
   const reflex = reflexFrom();
   return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started, cloudAttempt: { ok: winner.ok, error: winner.error, latencyMs: winner.latencyMs } };
 }
