@@ -350,3 +350,35 @@ Work Log:
 
 Stage Summary:
 - With 2+ brains wired, the owner can now CHOOSE who answers first on BOTH surfaces: web console Brains tab chooser (auto-syncs to the gateway) or /model in Telegram (inline tap picker). The choice is one shared field (Active-Brain passport): pick anywhere, it holds everywhere, survives re-pairing, self-heals when the picked provider is removed, and a dead active brain still falls through the chain — the chooser changes WHO goes first, never reliability.
+
+---
+Task ID: ui-menu-overlap-fix
+Agent: main (Super Z)
+Task: "Something messed up in the upper UI menu" (screenshot: dashboard header at mobile width — language pills drawn over the deep-init_ logo, Русский clipped under English pill).
+
+Work Log:
+- Backup FIRST (user hard rule): git tag backup/pre-ui-menu-fix-20260918 pushed to origin + tarball backups/deep-init-ai-backup-20260918-ui-menu.tar.gz.
+- Reproduced with seeded-dashboard Playwright runs: at 360-540px the LangSwitch overlapped the logo (lang 28→222 over logo 48→144); page docScrollW=1134px → horizontal overflow on phones.
+- Root cause 1 (header): single-line justify-between header — right group (LangSwitch+Lock+Reset ≈390px) cannot fit beside the logo on phones; flex-shrink collapses the group boxes while their non-shrinkable children visually overlap.
+- Root cause 2 (page blowout): skills-panel detail rows (truncate = nowrap) contributed ~1050px min-content to the lg:grid-cols-[1.15fr_0.85fr] grid track (grid blowout) → whole page 1134px wide.
+- Fixes: (a) dashboard header restructured — LangSwitch moves to its own row below md (md:hidden row 2), row 1 = logo | uptime + Lock/Reset (icon-only under sm with title/aria labels kept); (b) LangSwitch: compact EN/RU/HE short codes under sm, full labels sm+, className now merged via cn()/twMerge so `hidden md:inline-flex` actually overrides the base inline-flex (plain string concat lost the Tailwind cascade); (c) min-w-0 on loop/quick grid items + skills rows kills the blowout; (d) portal-login kicker hidden under sm; (e) landing header flex-wrap safety.
+- Tests: NEW scripts/verify-header-fix.mjs 27/27 — no overlaps + no page overflow at 320/360/412/540/640/768/900/1280 × all 9 tabs × Hebrew RTL; NEW scripts/verify-other-surfaces.mjs 10/10 (landing + portal fit at 5 widths); e2e-newuser 18/18; tsc(src) clean; eslint --max-warnings=0 clean.
+- Deploy: commit dfe0320 → origin/main → Vercel prod deep-init-dsvq8irqj Ready; origin deep-init-ai.vercel.app verified 27/27 with the fix live (bundle marker sm:px-2 present in chunk d4bc2dd3).
+- Cache note: custom domain deep-init.space-z.ai proxies via space-z FC which serves stale HTML (observed Cache-Control: s-maxage=31536000 injected at the proxy; cache key ignores query strings). Cached copy contained the previous (model-picker) build → proxy refreshes between deploys within ~tens of minutes; new build propagates the same way.
+
+Stage Summary:
+- The upper menu can no longer overlap at any width: language pills get their own row on phones/tablets (compact EN/RU/HE codes), desktop keeps the original single-row layout, and the overview page no longer overflows horizontally (1134px → viewport width). Verified in LTR + Hebrew RTL on prod origin.
+
+---
+Task ID: ui-menu-overlap-fix (deploy addendum)
+Agent: main (Super Z)
+Task: Production propagation of the UI-menu fix.
+
+Work Log:
+- First prod deploy deep-init-dsvq8irqj Ready; origin deep-init-ai.vercel.app verified 27/27 (verify-header-fix.mjs) with bundle marker sm:px-2 in chunk d4bc2dd3.
+- Custom domain deep-init.space-z.ai kept serving a ~4.5h-old HTML copy: the space-z FC proxy injects Cache-Control: s-maxage=31536000, ignores query-string cache-busters and If-None-Match revalidation (tested both).
+- Permanent hardening: next.config.ts headers() now sends "Cache-Control: no-store, must-revalidate" for "/" (client-rendered SPA shell; /_next/static hashed assets untouched). Verified live on origin.
+- Redeploy deep-init-b8osodhqb Ready; UI-fix marker re-verified on origin.
+
+Stage Summary:
+- Fix is LIVE and verified on the origin (deep-init-ai.vercel.app). The custom domain follows when its proxy cache cycles (observed lifetime: hours; it has cycled before and now the origin forbids long pinning). Users can hard-refresh Chrome after it flips.
