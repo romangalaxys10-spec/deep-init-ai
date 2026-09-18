@@ -303,3 +303,30 @@ Work Log:
 
 Stage Summary:
 - The agent now sounds like the persona you pick — on BOTH surfaces, from ONE catalog: pick in the web console (auto-syncs to Telegram) or send /voice in the chat and tap a persona button; Russian/Hebrew replies automatically switch to a native voice of the same style instead of being mangled by an English one
+
+---
+Task ID: voiceout-v2-reflex-providers
+Agent: main (Super Z)
+Task: Fix three production bugs: (A) Telegram voice replies sent as leaked file path text + broken 0:00 voice bubble ("sends me path and then reads the path"); (B) bot echoing "[AUTOMATED TOOL RESULTS...]" and ignoring a custom provider added after pairing; (C) built-in zai demo brain never usable before a user provider exists.
+
+Work Log:
+- Root-caused A: tools.ts runTts fell back to writing public/generated/voice-x.wav (unservable on serverless) and instructed the model to repeat "🎙 voice note: <relative path>"; extractMediaLinks only matched https:// so the path leaked into chat; voice-mirror then spoke it. zai-tier WAV bytes sent as voice.ogg produced the empty 0:00 bubble.
+- New architecture (VoiceOut v2): media tools deliver bytes DIRECTLY to the chat. New leaf module src/lib/tg-media.ts (tgMultipartCall, tgSendVoiceBytes/AudioBytes/PhotoBytes, deliverVoiceBytes with container-aware send plans: mp3→sendVoice→sendAudio, wav→sendAudio only, magic-byte sniffing, TELEGRAM_API_BASE override for tests). telegram.ts re-exports for compat.
+- tools.ts runTts: persona-aware synthesizeVoice (chat pick → agent pick → explicit param), direct delivery via ctx (agentKey+chatId+voiceId), voice-ledger note, result text carries NO path/URL; no-ctx path = blob-only, honest failure (no local-write in production). runImageGen: direct tgSendPhotoBytes, prod never returns relative paths.
+- src/lib/voice-ledger.ts: per-chat delivery notes (TTL 90s) — deliverReply consumes them so the mirror never double-speaks.
+- voice-out.ts: Edge tier FIRST always (kills the stuck-Asian-female z-ai default + the WAV bubble), SynthResult.container, mdToSpeechText strips voice-note lines and internal paths. voice-personas.ts docs updated.
+- telegram.ts: extractMediaLinks hardened + exported (relative voice-note lines and relative images stripped, stray /public/generated + /tmp paths scrubbed); deliverVoiceNote container-aware; voiceId passed in toolCtx.
+- Root-caused B1 (echo): brain.ts injected tool feedback as user messages; callDemoBrain picked the last synthetic message as "the user". New extractReflexContext() skips NUDGE_MARKER + TOOL_RESULTS_MARKER messages and returns (real user text, tool results). Exported TOOL_RESULTS_MARKER from tools.ts; executeToolCalls uses it as its header.
+- reflex-brain.ts v2: ReflexContext {toolResults, hasProviders, providerError}; tool-result answers ("My tools already ran…") quote real gathered data; provider-aware note says "Degraded mode + last provider error" instead of telling the user to add a key they already added.
+- Root-caused B2 (provider ignored): /api/agent/config had NO providers field — pairing-time snapshot was forever. Route now accepts validated providers (sanitizeProviders, ≤10, openai/anthropic compat), persists to the gateway agent, echoes back. store.ts addProvider/updateProvider/removeProvider/moveProvider now debounce-push providersForGateway to /api/agent/config.
+- Root-caused C: zai.ts materialized the SDK config without the session token (X-Token header) → added ZAI_TOKEN env support; set ZAI_BASE_URL/ZAI_API_KEY/ZAI_TOKEN on Vercel prod. Prod probe proved internal-api.z.ai is unreachable from Vercel's network — demo brain now uses a two-phase cloud race: 4.5s reflex race → synchronous reachability probe (any HTTP status = reachable) → reachable means slow GLM gets a 25s slow-ok budget for a REAL answer; unreachable marks health "dead" → INSTANT reflex (0.5s measured on prod) with TTL self-healing re-probe. Cloud attempts surface in fallbackChain as "Deep-init demo brain (cloud attempt)" diagnostics. Demo brain answers live in sandbox/dev (tests prove it).
+- Tests: NEW scripts/test-voice-out-v2.ts (34 checks: path-leak removal, speak-safe text, container plans, magic-byte sniffing, ledger, mock Bot API round-trips incl. sendVoice-rejection fallback, live TTS + direct delivery, pathless honest failures); NEW scripts/test-reflex-v2.ts (18 checks: synthetic-message skipping, tool-results answers, provider-aware note, canned reflexes, end-to-end provider-dies-mid-tool-loop); NEW scripts/test-provider-sync.ts (10 checks on the route contract).
+- Full regression: brains 76, tools 30, telegram-format 17, attachments 29, nudge 16, voice-out v1 23, voice-picker 48, dup-fix 10, streaming PASS, i18n parity 140 keys, tsc(src) clean, eslint clean.
+- Deploys: 91840a8 → diagnostics → health-aware race → two-phase probe (deep-init-808l23oy7 live on https://deep-init-ai.vercel.app). Prod smoke: reflex math answers, chain diagnostics visible, 2nd-call reflex latency 0.5s.
+- Repo featured: starred, description + homepage + topics set via API.
+
+Stage Summary:
+- Voice: the model never sees or repeats a path again; audio bytes go tool→Bot API directly; WAV never renders as a broken voice bubble; no double-speak.
+- Reflex: never echoes engine plumbing; answers from real tool output; tells the truth about the user's own provider failing (with the error).
+- Providers: portal edits reach the Telegram gateway without re-pairing (Provider Passport).
+- Demo brain: honest + fast on prod (internal endpoint unreachable from Vercel — instant reflex with diagnostics), real GLM answers wherever the endpoint is reachable (sandbox/dev, or any future public endpoint).
