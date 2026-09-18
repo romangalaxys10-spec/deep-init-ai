@@ -180,29 +180,47 @@ async function callAnthropic(
   }
 }
 
-/** How long the cloud demo tier may think before the offline reflex takes over.
- *  On deployments with no egress to the model endpoint the cloud call hangs in
- *  TCP-connect for ~10s — unacceptable for chat/voice UX, so we race it. */
+/** How long the cloud demo tier may think before we check whether it is
+ *  even reachable. On deployments with no egress the cloud call hangs in
+ *  TCP-connect — unacceptable for chat/voice UX, so we race it. */
 const DEMO_CLOUD_TIMEOUT_MS = 4500;
-/** When the cloud tier is KNOWN reachable but slow (cross-region GLM), a real
- *  answer is worth waiting for — this is the health-aware deadline. */
+/** When the cloud tier is KNOWN reachable (probe passed / call completed),
+ *  a real GLM answer is worth waiting for — cross-region completions take
+ *  5–15s. This is the total budget from call start. */
 const DEMO_CLOUD_SLOW_OK_MS = 25_000;
+/** The reachability probe budget (DNS+TCP+TLS+HTTP to the base URL). */
+const CLOUD_PROBE_TIMEOUT_MS = 2_500;
 const CLOUD_HEALTH_TTL_MS = 5 * 60_000;
 
-/** Per-instance demo-cloud health: "alive" = a call eventually completed
- *  (maybe after the race window) → give the next calls a fair deadline;
- *  "dead" = a call eventually failed fast → reflex immediately next time. */
+/** Per-instance demo-cloud health: "alive" = reachable & completing →
+ *  skip the short race and wait for the real answer; "dead" = probe or
+ *  call failed → reflex instantly instead of burning the race window. */
 let cloudHealth: { state: "alive" | "dead"; at: number } | null = null;
-
-function cloudDeadline(): number {
-  if (cloudHealth?.state === "alive" && Date.now() - cloudHealth.at < CLOUD_HEALTH_TTL_MS) {
-    return DEMO_CLOUD_SLOW_OK_MS;
-  }
-  return DEMO_CLOUD_TIMEOUT_MS;
-}
 
 function noteCloudHealth(state: "alive" | "dead") {
   cloudHealth = { state, at: Date.now() };
+}
+
+function cloudIsAlive(): boolean {
+  return cloudHealth?.state === "alive" && Date.now() - cloudHealth.at < CLOUD_HEALTH_TTL_MS;
+}
+
+/**
+ * Reachability probe — a bare GET to the model base URL. ANY response
+ * (even 401/404) proves DNS+TCP+TLS work from this deployment; a throw
+ * means unreachable and the reflex tier must cover instantly.
+ */
+async function probeCloudReachable(baseUrl: string): Promise<boolean> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), CLOUD_PROBE_TIMEOUT_MS);
+  try {
+    await fetch(baseUrl, { signal: controller.signal, cache: "no-store" });
+    return true; // any HTTP status = reachable
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 /**
@@ -257,10 +275,6 @@ async function callDemoBrain(messages: Msg[], reflexCtx?: { hasProviders?: boole
     }
   })();
 
-  const timer = new Promise<"timeout">((resolve) =>
-    setTimeout(() => resolve("timeout"), cloudDeadline())
-  );
-
   const reflexFrom = () => {
     const { userText, toolResults } = extractReflexContext(messages);
     const ctx: ReflexContext = {
@@ -271,46 +285,66 @@ async function callDemoBrain(messages: Msg[], reflexCtx?: { hasProviders?: boole
     return reflexReply(userText, ctx);
   };
 
-  /** Surface WHY the cloud tier lost — never block the answer on it.
-   *  The eventual outcome also feeds cloudHealth: slow-but-alive calls earn
-   *  a longer race window next time; fast failures get instant reflexes. */
-  const diagnose = async (): Promise<NonNullable<CallResult["cloudAttempt"]>> => {
-    try {
-      const r = await cloud;
-      noteCloudHealth(r.ok ? "alive" : "dead");
-      return { ok: r.ok, error: r.error, latencyMs: r.latencyMs };
-    } catch (e) {
-      noteCloudHealth("dead");
-      return { ok: false, error: e instanceof Error ? e.message : String(e), latencyMs: Date.now() - started };
-    }
+  const at = (ms: number) =>
+    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), Math.max(0, ms - (Date.now() - started))));
+
+  const finishWithReflex = (attempt: NonNullable<CallResult["cloudAttempt"]>): CallResult => {
+    const reflex = reflexFrom();
+    return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started, cloudAttempt: attempt };
   };
 
-  let cloudAttempt: NonNullable<CallResult["cloudAttempt"]> | undefined;
-  const winner = await Promise.race([cloud, timer]);
-  if (winner === "timeout") {
-    /* Cloud tier too slow or unreachable — the agent NEVER goes mute and
-       never leaves the user hanging: answer from the offline reflex NOW
-       (the reflex must never wait on the diagnosis). The eventual cloud
-       outcome is logged in the background for reachability diagnosis. */
-    void diagnose().then((d) => {
-      if (!d.ok) {
-        console.error(`[demo-brain:cloud] covered by reflex — cloud outcome: ${d.error} (${d.latencyMs}ms)`);
-      } else {
-        console.error(`[demo-brain:cloud] answered AFTER the race window (${d.latencyMs}ms) — next calls get the slow-ok deadline`);
-      }
-    });
-    const reflex = reflexFrom();
-    return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started, cloudAttempt: { ok: false, error: "cloud exceeded the reflex race window (diagnosed in background)", latencyMs: DEMO_CLOUD_TIMEOUT_MS } };
-  }
-  if (winner.ok) {
-    noteCloudHealth("alive");
-    return winner;
+  /*
+   * Two-phase cloud race — the fix for "why can't the built-in zai brain
+   * answer before a user provider exists":
+   *  Phase 1: race the cloud call against the fast reflex window. Winner
+   *           returns/reflects immediately — UX never degrades.
+   *  Phase 2: on timeout, probe the endpoint SYNCHRONOUSLY (a bare GET;
+   *           any HTTP status proves reachability — DNS/TCP/TLS work).
+   *           • unreachable → reflex right away (endpoint truly dead)
+   *           • reachable   → the model is just SLOW (cross-region GLM
+   *             takes 5–15s) → keep waiting within the slow-ok budget and
+   *             return the REAL demo-brain answer. This is exactly the
+   *             "use the internal tunnel AI in reflex mode" behavior.
+   * The old fixed 4.5s race reflexed EVERY call on Vercel (background
+   * diagnosis can't run there — lambdas freeze after the response), so
+   * the built-in brain never got a fair chance.
+   */
+  const firstDeadline = cloudIsAlive() ? DEMO_CLOUD_SLOW_OK_MS : DEMO_CLOUD_TIMEOUT_MS;
+  const winner = await Promise.race([cloud, at(firstDeadline)]);
+
+  if (winner !== "timeout") {
+    if (winner.ok) {
+      noteCloudHealth("alive");
+      return winner;
+    }
+    noteCloudHealth("dead");
+    return finishWithReflex({ ok: false, error: winner.error, latencyMs: winner.latencyMs });
   }
 
-  /* cloud answered quickly but failed → reflex */
+  if (firstDeadline === DEMO_CLOUD_SLOW_OK_MS) {
+    // health said alive, yet it outlived even the slow budget — model path broken
+    noteCloudHealth("dead");
+    return finishWithReflex({ ok: false, error: "cloud exceeded the slow-ok budget", latencyMs: Date.now() - started });
+  }
+
+  /* Phase 2 — reachability probe */
+  const probeUrl = process.env.ZAI_BASE_URL || "https://api.z.ai";
+  const reachable = await probeCloudReachable(probeUrl);
+  if (!reachable) {
+    noteCloudHealth("dead");
+    return finishWithReflex({ ok: false, error: "model endpoint unreachable (probe failed)", latencyMs: Date.now() - started });
+  }
+
+  /* reachable → wait for the real answer within the slow-ok budget */
+  noteCloudHealth("alive");
+  const second = await Promise.race([cloud, at(DEMO_CLOUD_SLOW_OK_MS)]);
+  if (second !== "timeout") {
+    noteCloudHealth(second.ok ? "alive" : "dead");
+    if (second.ok) return second;
+    return finishWithReflex({ ok: false, error: second.error, latencyMs: second.latencyMs });
+  }
   noteCloudHealth("dead");
-  const reflex = reflexFrom();
-  return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started, cloudAttempt: { ok: winner.ok, error: winner.error, latencyMs: winner.latencyMs } };
+  return finishWithReflex({ ok: false, error: "cloud exceeded the slow-ok budget", latencyMs: Date.now() - started });
 }
 
 export interface ChainResult {
