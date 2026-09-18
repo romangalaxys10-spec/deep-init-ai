@@ -330,3 +330,23 @@ Stage Summary:
 - Reflex: never echoes engine plumbing; answers from real tool output; tells the truth about the user's own provider failing (with the error).
 - Providers: portal edits reach the Telegram gateway without re-pairing (Provider Passport).
 - Demo brain: honest + fast on prod (internal endpoint unreachable from Vercel — instant reflex with diagnostics), real GLM answers wherever the endpoint is reachable (sandbox/dev, or any future public endpoint).
+
+---
+Task ID: model-picker-chooser
+Agent: main (Super Z)
+Task: Missing feature — "In telegram and in web console menu need offer option choose provider / model (when more than is added under brains)". Backup before changes requested.
+
+Work Log:
+- Backup FIRST: git tag backup/pre-model-picker-20260918 pushed to origin + tarball backups/deep-init-ai-backup-20260918-053438.tar.gz (kept on disk, excluded from repo via .gitignore).
+- NEW src/lib/active-provider.ts — "Active-Brain passport" core shared by both surfaces: providerKey() = stable `label::baseUrl::model` identity (web provider ids never leave the browser), orderProviders() = PURE reorder putting the picked brain first (rest keep relative order = real fallback semantics), providerDisplayName().
+- RegisteredAgent.activeProvider (registry) — preserved across re-pairing like presetId/brains/voiceId.
+- /api/agent/config now accepts activeProvider (string|null): valid pick persists+echoes, unknown key → lenient clear (ok:true), explicit null → auto; a providers-set push self-heals a stale pick to auto; only explicit activeProvider touches the choice (plain provider CRUD never clobbers a Telegram-side pick).
+- Web console (Brains tab): when >1 brain is wired, an "active brain — who answers first" chooser panel appears (⚡ auto + one button per brain, ✅ marks current, "current:" line); the picked row gets an ACTIVE badge in the fallback-chain list. store.activeProviderId (persisted in localStorage) + setActiveProvider() → instant gateway push + activity log. Console chat (agent-console) sends the picked brain first.
+- Telegram gateway: /model (+ /models, /brains) inline picker mirroring the /voice pattern — one button per brain + "🔹 Auto (priority order)" row, ✅ marks the active one, edit-in-place re-render after every tap, owner-only (whitelist users get an honest denial toast), tap-time index resolution against the CURRENT provider list (stale renders can't bind dead picks), unknown idx → "no longer exists" toast, empty registry → demo-brain note. /status now shows "Active brain:", /help advertises /model. streamReplyToChat orders agent.providers by the pick before runAgentChainStreaming.
+- BUG caught by the e2e: orderProviders originally used splice → MUTATED the live agent.providers array (Beta vanished from the chain after the first chat with a pick). Fixed to pure + purity unit test hardened (length + full membership assert).
+- Tests: NEW scripts/test-model-picker.ts 49 checks, deterministic across runs (purges dev .gateway/registry.json at boot): ordering core, passport contract (valid/unknown/null/self-heal), re-pairing preservation, picker markup + callbacks (✅ marks, auto row, owner-gating on command AND callback, unknown idx), /help + /status surfaces, LIVE e2e with two mock brains: tapped brain answers first, auto restores priority, portal pick drives the same Telegram chain, dead ACTIVE brain falls back to the next brain (never errors).
+- Full regression: brains 76, tools 30, telegram-format 17, attachments 29, nudge 16, provider-sync 10, reflex-v2 18, voice-out 23, voice-out-v2 34, voice-picker 48, dup-fix 10, parity 63, i18n 140x3, streaming PASS, browser e2e-newuser 18/18, tsc(src) clean, eslint clean.
+- Deploy: commit a53874e → origin/main → Vercel prod deep-init-5d4p8mhmj live on deep-init.space-z.ai (landing 200 both domains, chat API answering, config route contract verified).
+
+Stage Summary:
+- With 2+ brains wired, the owner can now CHOOSE who answers first on BOTH surfaces: web console Brains tab chooser (auto-syncs to the gateway) or /model in Telegram (inline tap picker). The choice is one shared field (Active-Brain passport): pick anywhere, it holds everywhere, survives re-pairing, self-heals when the picked provider is removed, and a dead active brain still falls through the chain — the chooser changes WHO goes first, never reliability.
