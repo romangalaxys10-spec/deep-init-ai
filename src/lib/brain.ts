@@ -68,6 +68,8 @@ interface CallResult {
   latencyMs: number;
   /** provenance override — e.g. "Deep-init demo brain (offline reflex)" */
   via?: string;
+  /** diagnostics from the covered demo-cloud attempt (timeout reflex path) */
+  cloudAttempt?: { ok: boolean; error?: string; latencyMs: number };
 }
 
 async function callOpenAICompatible(
@@ -249,18 +251,38 @@ async function callDemoBrain(messages: Msg[], reflexCtx?: { hasProviders?: boole
     return reflexReply(userText, ctx);
   };
 
+  /** Surface WHY the cloud tier lost — never block the answer on it.
+   *  Reachability diagnosis (unreachable endpoint vs slow model) lands in
+   *  the fallback chain instead of vanishing into a timeout. */
+  const diagnose = async (): Promise<NonNullable<CallResult["cloudAttempt"]>> => {
+    try {
+      const r = await cloud;
+      return { ok: r.ok, error: r.error, latencyMs: r.latencyMs };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e), latencyMs: Date.now() - started };
+    }
+  };
+
+  let cloudAttempt: NonNullable<CallResult["cloudAttempt"]> | undefined;
   const winner = await Promise.race([cloud, timer]);
   if (winner === "timeout") {
     /* Cloud tier too slow or unreachable — the agent NEVER goes mute and
-       never leaves the user hanging: answer from the offline reflex now. */
+       never leaves the user hanging: answer from the offline reflex NOW
+       (the reflex must never wait on the diagnosis). The eventual cloud
+       outcome is logged in the background for reachability diagnosis. */
+    void diagnose().then((d) => {
+      if (!d.ok) {
+        console.error(`[demo-brain:cloud] covered by reflex after ${DEMO_CLOUD_TIMEOUT_MS}ms — cloud outcome: ${d.error} (${d.latencyMs}ms)`);
+      }
+    });
     const reflex = reflexFrom();
-    return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started };
+    return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started, cloudAttempt: { ok: false, error: "cloud exceeded the reflex race window", latencyMs: DEMO_CLOUD_TIMEOUT_MS } };
   }
   if (winner.ok) return winner;
 
   /* cloud answered quickly but failed → reflex */
   const reflex = reflexFrom();
-  return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started };
+  return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started, cloudAttempt: { ok: winner.ok, error: winner.error, latencyMs: winner.latencyMs } };
 }
 
 export interface ChainResult {
@@ -548,6 +570,15 @@ async function runChainOnceStreaming(
       hasProviders: providers.length > 0,
       providerError: fallbackChain.find((s) => !s.ok)?.error,
     });
+    if (demo.cloudAttempt && !demo.cloudAttempt.ok) {
+      fallbackChain.push({
+        provider: "Deep-init demo brain (cloud attempt)",
+        model: "glm",
+        ok: false,
+        latencyMs: demo.cloudAttempt.latencyMs,
+        error: demo.cloudAttempt.error,
+      });
+    }
     fallbackChain.push({
       provider: demo.via || "Deep-init demo brain",
       model: "glm",
@@ -730,6 +761,15 @@ async function runChainOnce(
       hasProviders: providers.length > 0,
       providerError: fallbackChain.find((s) => !s.ok)?.error,
     });
+    if (demo.cloudAttempt && !demo.cloudAttempt.ok) {
+      fallbackChain.push({
+        provider: "Deep-init demo brain (cloud attempt)",
+        model: "glm",
+        ok: false,
+        latencyMs: demo.cloudAttempt.latencyMs,
+        error: demo.cloudAttempt.error,
+      });
+    }
     fallbackChain.push({
       provider: demo.via || "Deep-init demo brain",
       model: "glm",
