@@ -309,6 +309,13 @@ async function callDemoBrain(messages: Msg[], reflexCtx?: { hasProviders?: boole
    * diagnosis can't run there — lambdas freeze after the response), so
    * the built-in brain never got a fair chance.
    */
+
+  /* known-dead endpoint (fresh TTL) → reflex instantly; the endpoint gets
+   * re-probed after the TTL heals, so network recovery is still picked up */
+  if (cloudHealth?.state === "dead" && Date.now() - cloudHealth.at < CLOUD_HEALTH_TTL_MS) {
+    return finishWithReflex({ ok: false, error: "skipped — model endpoint known unreachable (will re-probe)", latencyMs: 0 });
+  }
+
   const firstDeadline = cloudIsAlive() ? DEMO_CLOUD_SLOW_OK_MS : DEMO_CLOUD_TIMEOUT_MS;
   const winner = await Promise.race([cloud, at(firstDeadline)]);
 
