@@ -114,7 +114,7 @@ export function PortalLogin({ onSuccess }: { onSuccess: () => void }) {
           <Logo className="text-lg" />
           <div className="flex items-center gap-2">
             <LangSwitch />
-            <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+            <span className="hidden items-center gap-1.5 font-mono text-[11px] text-muted-foreground sm:inline-flex">
               <ShieldCheck className="h-3.5 w-3.5 text-primary" /> {t("pl.kicker")}
             </span>
           </div>

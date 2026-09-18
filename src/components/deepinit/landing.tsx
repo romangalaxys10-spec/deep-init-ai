@@ -51,7 +51,7 @@ export function Landing({ onInitialize }: { onInitialize: () => void }) {
     <div className="di-grid-bg min-h-screen">
       {/* nav */}
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/70 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
+        <div className="mx-auto flex min-h-16 max-w-6xl flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2 sm:px-6">
           <div className="flex items-center gap-3">
             <TerminalSquare className="h-5 w-5 text-primary" />
             <Logo className="text-lg" />

@@ -155,6 +155,8 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     <div className="di-grid-bg flex min-h-screen flex-col">
       {/* header */}
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md">
+        {/* row 1 — logo | uptime + lock/reset; the language switch drops to its own row below md
+            so the pills can never overlap the logo on narrow screens */}
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <TerminalSquare className="h-5 w-5 shrink-0 text-primary" />
@@ -162,24 +164,25 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
             <span className="hidden h-4 w-px bg-border sm:block" />
             <span className="hidden truncate font-mono text-sm text-primary sm:block">{profile.agentName}</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <span className="hidden items-center gap-2 font-mono text-[11px] text-muted-foreground md:inline-flex">
               <StatusDot ok /> {t("dash.activeUp", { uptime })}
             </span>
-            <LangSwitch />
+            <LangSwitch className="hidden md:inline-flex" />
             <Button
               variant="outline"
               size="sm"
-              className="font-mono text-xs"
+              className="px-2.5 font-mono text-xs"
               onClick={onLogout}
               aria-label="Log out of the portal"
+              title={t("act.lock")}
             >
-              <LogOut className="mr-1.5 h-3.5 w-3.5" /> {t("act.lock")}
+              <LogOut className="h-3.5 w-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">{t("act.lock")}</span>
             </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button variant="outline" size="sm" className="font-mono text-xs">
-                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> {t("act.reset")}
+                <Button variant="outline" size="sm" className="px-2.5 font-mono text-xs" title={t("act.reset")}>
+                  <RotateCcw className="h-3.5 w-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">{t("act.reset")}</span>
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
@@ -196,6 +199,11 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               </AlertDialogContent>
             </AlertDialog>
           </div>
+        </div>
+
+        {/* row 2 (mobile/tablet only) — language switch gets the full width to itself */}
+        <div className="mx-auto max-w-7xl px-4 pb-2 sm:px-6 md:hidden">
+          <LangSwitch />
         </div>
 
         {/* tabs */}
@@ -232,9 +240,9 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               <StatCard icon={<MonitorSmartphone className="h-4 w-4 text-primary" />} label={t("stat.machines")} value={`${machinesLinked}`} sub={machinesLinked ? t("stat.sshTunnel") : t("stat.pairInstances")} />
             </div>
 
-            {/* loop + quick actions */}
+            {/* loop + quick actions — min-w-0 stops nowrap children from blowing the grid track out */}
             <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
-              <Panel className="p-5">
+              <Panel className="min-w-0 p-5">
                 <div className="flex items-center justify-between border-b border-border/70 pb-3">
                   <div className="flex items-center gap-2">
                     <HeartPulse className="h-4 w-4 text-primary" />
@@ -258,7 +266,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
                 </div>
               </Panel>
 
-              <div className="space-y-4">
+              <div className="min-w-0 space-y-4">
                 <Panel className="p-5">
                   <MonoLabel>{t("missions.title")}</MonoLabel>
                   <p className="mt-2 text-sm text-muted-foreground">
@@ -290,16 +298,16 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
 
                 <Panel className="p-5">
                 <MonoLabel>{t("skills.title")}</MonoLabel>
-                <div className="di-scroll mt-2 max-h-44 space-y-2 overflow-y-auto">
+                <div className="di-scroll mt-2 min-w-0 max-h-44 space-y-2 overflow-y-auto">
                   {skills.map((sk) => (
-                    <div key={sk.id} className="rounded-lg border border-border/70 bg-background/40 px-3 py-2">
-                      <div className="flex items-center justify-between gap-2">
+                    <div key={sk.id} className="min-w-0 rounded-lg border border-border/70 bg-background/40 px-3 py-2">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
                         <span className="truncate font-mono text-xs text-foreground">{sk.name}</span>
                         <span className={`shrink-0 font-mono text-[10px] ${sk.status === "armed" ? "text-primary" : "text-amber-400"}`}>
                           {sk.status}
                         </span>
                       </div>
-                      <div className="mt-1 flex items-center gap-1.5">
+                      <div className="mt-1 flex min-w-0 items-center gap-1.5">
                         <span className="rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">{sk.source}</span>
                         <span className="truncate text-[11px] text-muted-foreground">{sk.detail}</span>
                       </div>

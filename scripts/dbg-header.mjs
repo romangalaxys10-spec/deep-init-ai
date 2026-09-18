@@ -1,0 +1,12 @@
+import { chromium } from "playwright";
+const SEED = { state: { view: "dashboard", agentActive: true, profile: { displayName: "roman", agentName: "Init", timezone: "UTC", portalUser: "roman", portalToken: "di_seed0000000000000000" } }, version: 0 };
+const browser = await chromium.launch();
+const ctx = await browser.newContext({ viewport: { width: 412, height: 1400 } });
+const page = await ctx.newPage();
+page.on("console", m => { if (m.type() === "error") console.log("CONSOLE ERR:", m.text().slice(0, 200)); });
+await page.goto("http://localhost:3000", { waitUntil: "domcontentloaded" });
+await page.evaluate((s) => localStorage.setItem("deep-init-state-v1", JSON.stringify(s)), SEED);
+await page.reload({ waitUntil: "networkidle" });
+await page.waitForTimeout(1500);
+console.log("BODY:", (await page.locator("body").innerText()).slice(0, 400).replace(/\n+/g, " | "));
+await browser.close();
