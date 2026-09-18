@@ -382,3 +382,23 @@ Work Log:
 
 Stage Summary:
 - Fix is LIVE and verified on the origin (deep-init-ai.vercel.app). The custom domain follows when its proxy cache cycles (observed lifetime: hours; it has cycled before and now the origin forbids long pinning). Users can hard-refresh Chrome after it flips.
+
+---
+Task ID: language-mirror
+Agent: main (Super Z)
+Task: "Add voice recognition in multi-language so it doesn't matter which language I record, it will be able to understand and respond to me in the same language using text and voice. And make this feature an on/off toggle."
+
+Work Log:
+- Backup FIRST: tag backup/pre-lang-mirror-20260918 pushed + backups/deep-init-ai-backup-20260918-pre-lang-mirror.tar.gz.
+- NEW src/lib/lang-detect.ts — isomorphic Language Mirror core: detectLang (script ranges + Ukrainian/Persian refinement + Latin stop-word/diacritic scoring) across 22 languages; languageDirective (deterministic reply-language instruction); appendDirective (the ONE shared rule for gateway + web, pure/testable); parseLangTag.
+- asr.ts — multi-locale STT: nextLocales (hint first, priority queue, cap 4 passes), pickBestPass (early-stop ≥0.75 confidence, else best-of-rest, tie→hint prior), googleStt now returns confidence; AsrResult carries lang (detectLang of the transcript) + confidence; z-ai fallback transcripts language-tagged too.
+- voice-personas.ts — LOCALE_VOICES 3 → 22 languages, gender-matched native Edge voices; detectSpeechLang delegates to detectLang. LIVE audit scripts/verify-locale-voices.ts: 44 voice syntheses against the real Edge tier — all pass except id-ID-ArifNeural (genuinely failing, proven vs GadisNeural control) → id male falls back to Gadis with a documented comment.
+- Telegram gateway: transcribeTelegramVoice(multiLang) → Intake.lang; binding resolved before intake to gate on the toggle; appendDirective pins the reply language for THAT voice turn; /lang + /language command (inline picker lm:on|lm:off, owner-only, direct on/off args, edit-in-place re-render), /help + /status surfaces.
+- Web: Language Mirror toggle in the voice popover (i18n en/ru/he); mirror ON bypasses locale-locked browser SpeechRecognition → server multi-locale STT (dictation AND hands-free voice mode); transcripts carry their language through MicButton/useVoiceMode → agent-console → /api/chat voiceLang → appendDirective on the system prompt.
+- Setting: agent.langMirror (undefined = ON) on RegisteredAgent + RegisterInput, preserved across re-pairing; /api/agent/config accepts strict boolean (never clobbered by voice/provider pushes) and echoes default; store.voice.langMirror (default true) rides the voice gateway sync; zustand persist merge guard deep-merges `voice` so existing users stay ON.
+- Tests: NEW scripts/test-lang-mirror.ts 69/69 (detection ×19, STT strategy ×8, directive ×7, voices ×7, config contract ×5, re-pairing ×2, /lang picker+gating+status/help ×14, chat-route directive e2e with a capturing mock brain ×7); scripts/verify-lang-mirror-live.ts LIVE on prod: Spanish WAV → multi-locale STT → transcript with lang:"es" conf 0.89.
+- Regression: brains 76, tools 30, tg-format 17, attachments 29, nudge 16, provider-sync 10, reflex-v2 18, voice-out 23, voice-out-v2 34, voice-picker 48, model-picker 49, dup-fix 10, parity 63, i18n parity, streaming PASS, e2e-newuser 18/18; tsc(src) clean; eslint clean.
+- Deploy: commit bb72d08 → origin/main. INCIDENT: the vercel link (.vercel/project.json) had flipped to the stray "my-project" project — first deploy went there (removed it), relinked to deep-init-ai and redeployed → deep-init-ia8kvsxtq Ready. Live checks on the origin: landing 200, /api/voice/stt multiLang contract + Spanish round-trip OK.
+
+Stage Summary:
+- The agent now UNDERSTANDS voice notes in any language (bounded multi-locale recognition) and answers in the SAME language — a pinned directive for text + gender-matched native voices for speech — guarded by a Language Mirror on/off toggle available on BOTH surfaces (web voice popover, Telegram /lang), shipped ON.
