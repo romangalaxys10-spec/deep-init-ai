@@ -18,8 +18,11 @@ import {
 import { runAgentChainStreaming } from "./brain";
 import { brainSignature } from "./brains";
 import { transcribeAudio } from "./asr";
-import { extractVoiceBlocks, mdToSpeechText, synthesizeVoice, type VoiceOutMode } from "./voice-out";
+import { extractVoiceBlocks, mdToSpeechText, synthesizeVoice, type SynthResult, type VoiceOutMode } from "./voice-out";
 import { personaByVoice, personaLabel, VOICE_PERSONAS } from "./voice-personas";
+import { consumeVoiceDelivered } from "./voice-ledger";
+import { deliverVoiceBytes, sniffAudioContainer, tgSendAudioBytes, tgSendPhotoBytes, tgSendVoiceBytes } from "./tg-media";
+import type { ToolContext } from "./tools";
 
 /** voice ids in picker order (module-level — the catalog is static) */
 const VOICE_PERSONA_IDS = VOICE_PERSONAS.map((p) => p.voice);
@@ -33,14 +36,26 @@ import {
   type CodeFile,
 } from "./telegram-format";
 
-/* Media links produced by the image_gen / tts tools are converted into
- * real Telegram media messages instead of raw URLs. */
-interface MediaRef {
+/* ---------------- media helpers (Hermes/OpenClaw-grade media delivery) ---------------- */
+
+export interface MediaRef {
   url: string;
   caption?: string;
 }
 
-function extractMediaLinks(md: string): {
+/**
+ * Pull real media (generated images / voice notes) out of a model reply so
+ * they are sent as actual Telegram media instead of raw links.
+ *
+ * Hardened after the production path-leak bug: the old tts/image_gen tools
+ * could emit lines like "🎙 voice note: /public/generated/voice-x.wav" and
+ * "![generated image](/public/generated/img-x.png)" — serverless artifacts
+ * that are NEVER servable. Anything not http(s) is stripped from the visible
+ * text (a relative path must never reach the chat), while absolute URLs
+ * still become real media messages. Stray internal path mentions are
+ * scrubbed too — defense in depth.
+ */
+export function extractMediaLinks(md: string): {
   text: string;
   photos: MediaRef[];
   audios: MediaRef[];
@@ -51,10 +66,17 @@ function extractMediaLinks(md: string): {
     photos.push({ url, caption: alt || undefined });
     return "";
   });
+  // relative-path images (unservable serverless artifacts) → strip silently
+  text = text.replace(/!\[[^\]]*\]\(\/?(?:public\/generated|tmp)\/[^)]*\)/gi, "");
+  // absolute audio/voice URLs → real voice/audio messages
   text = text.replace(/(?:🎙\s*)?(?:voice note|voice message|audio)\s*:\s*(https?:\/\/[^\s)]+)/gi, (_m, url) => {
     audios.push({ url, caption: undefined });
     return "";
   });
+  // relative-path "voice note:" lines → strip the whole line (never leak a path)
+  text = text.replace(/^\s*(?:🎙\s*)?(?:voice note|voice message|audio)\s*:\s*\/[^\s)]+.*$/gim, "");
+  // stray internal path mentions anywhere → scrub (defense in depth)
+  text = text.replace(/(?:\/public\/generated|\/tmp)\/[\w./-]*/g, "");
   return { text: text.replace(/\n{3,}/g, "\n\n").trim(), photos, audios };
 }
 
@@ -149,34 +171,13 @@ export async function tgGetFileBytes(token: string, fileId: string): Promise<Buf
   }
 }
 
-async function tgMultipartSend(
-  token: string,
-  method: string,
-  fileField: string,
-  bytes: Uint8Array,
-  filename: string,
-  extra: Record<string, string>
-): Promise<boolean> {
-  try {
-    const form = new FormData();
-    for (const [k, v] of Object.entries(extra)) form.append(k, v);
-    form.append(
-      fileField,
-      new Blob([bytes as unknown as BlobPart], { type: "application/octet-stream" }),
-      filename
-    );
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), TG_TIMEOUT_MS);
-    try {
-      const res = await fetch(tgUrl(token, method), { method: "POST", body: form, signal: controller.signal, cache: "no-store" });
-      return (await res.json() as { ok?: boolean }).ok === true;
-    } finally {
-      clearTimeout(t);
-    }
-  } catch {
-    return false;
-  }
-}
+/* ---------------- media transport (moved to tg-media.ts so the tool
+ * layer can deliver bytes directly without import cycles) ----------------
+ * tgSendVoiceBytes / tgSendAudioBytes / tgSendPhotoBytes are imported at
+ * the top of this file from "./tg-media" and re-exported below for any
+ * legacy importer of the gateway module. */
+
+export { tgSendVoiceBytes, tgSendAudioBytes };
 
 export async function tgSendPhoto(token: string, chatId: number, url: string, caption?: string): Promise<boolean> {
   try {
@@ -189,20 +190,6 @@ export async function tgSendPhoto(token: string, chatId: number, url: string, ca
   } catch {
     return false;
   }
-}
-
-export async function tgSendVoiceBytes(token: string, chatId: number, bytes: Uint8Array, caption?: string): Promise<boolean> {
-  return tgMultipartSend(token, "sendVoice", "voice", bytes, "voice.ogg", {
-    chat_id: String(chatId),
-    ...(caption ? { caption: caption.slice(0, 1000) } : {}),
-  });
-}
-
-export async function tgSendAudioBytes(token: string, chatId: number, bytes: Uint8Array, title?: string): Promise<boolean> {
-  return tgMultipartSend(token, "sendAudio", "audio", bytes, "audio.mp3", {
-    chat_id: String(chatId),
-    ...(title ? { title: title.slice(0, 60) } : {}),
-  });
 }
 
 export async function tgSendMessage(token: string, chatId: number, text: string) {
@@ -288,8 +275,11 @@ ${file.content}`);
 
 /**
  * Synthesize text and deliver it as a REAL Telegram voice note (the
- * waveform bubble, not an audio-file player). Falls back voice → audio;
- * returns false only when both uploads fail.
+ * waveform bubble, not an audio-player message). Container-aware: MP3
+ * goes through sendVoice (Telegram transcodes it server-side), WAV is
+ * routed to the audio player — sending WAV as a voice note rendered a
+ * broken 0:00 bubble in production. Returns false only when every
+ * upload attempt fails.
  */
 async function deliverVoiceNote(
   token: string,
@@ -298,13 +288,11 @@ async function deliverVoiceNote(
   caption?: string,
   persona?: { voiceId?: string | null; rate?: number; pitch?: number }
 ): Promise<boolean> {
-  const synth = await synthesizeVoice(speakText, persona);
+  const synth: SynthResult = await synthesizeVoice(speakText, persona);
   if (!synth.ok || !synth.bytes?.length) {
     return false;
   }
-  if (await tgSendVoiceBytes(token, chatId, synth.bytes, caption)) return true;
-  // sendVoice rejected the payload — the audio player still delivers it
-  return tgSendAudioBytes(token, chatId, synth.bytes, caption || "voice note");
+  return deliverVoiceBytes(token, chatId, synth.bytes, synth.container, caption);
 }
 
 /**
@@ -340,9 +328,15 @@ async function deliverReply(
   }
 
   // voice mirror — the reply itself, spoken (only when the model didn't
-  // already voice the answer via explicit blocks — never double-speak)
-  if (opts?.speak && cleaned && !voiceTexts.length) {
+  // already voice the answer via explicit blocks AND the tts tool didn't
+  // deliver audio for this turn — never double-speak, never read
+  // internal tool chatter aloud)
+  const toolAlreadyVoiced = consumeVoiceDelivered(`${agent.key}:${chatId}`);
+  if (opts?.speak && cleaned && !voiceTexts.length && !toolAlreadyVoiced) {
     await deliverVoiceNote(agent.botToken, chatId, mdToSpeechText(cleaned), undefined, persona);
+  } else {
+    // consume anyway so a stale note can't suppress the NEXT turn's mirror
+    consumeVoiceDelivered(`${agent.key}:${chatId}`);
   }
 
   if (failedBlocks.length) {
@@ -477,14 +471,11 @@ export async function sendFormatted(
       }
     }
     if (bytes) {
-      // voice-note bubble first (ogg/wav/mp3 all accepted by Telegram and
-      // transcoded server-side); audio-player fallback if sendVoice refuses
-      if (/\.(ogg|wav|mp3|m4a|opus)$/i.test(a.url)) {
-        const sent = await tgSendVoiceBytes(token, chatId, new Uint8Array(bytes), a.caption);
-        if (!sent) await tgSendAudioBytes(token, chatId, new Uint8Array(bytes), a.caption || "voice note");
-      } else {
-        await tgSendAudioBytes(token, chatId, new Uint8Array(bytes), a.caption || "voice note");
-      }
+      // container-aware: WAV must NOT go through sendVoice (broken 0:00
+      // bubble in production) — sniff the magic bytes and route accordingly
+      const container = sniffAudioContainer(new Uint8Array(bytes));
+      const sent = await deliverVoiceBytes(token, chatId, new Uint8Array(bytes), container, a.caption);
+      if (!sent) await tgSendAudioBytes(token, chatId, new Uint8Array(bytes), a.caption || "voice note");
     } else if (a.url.startsWith("http")) {
       await tgSendMessage(token, chatId, a.url);
     }
@@ -512,7 +503,7 @@ async function streamReplyToChat(
   agent: RegisteredAgent,
   chatId: number,
   messages: { role: "system" | "user" | "assistant"; content: string }[],
-  opts?: { toolCtx?: { agentKey?: string; chatId?: number }; speak?: boolean; voiceId?: string | null }
+  opts?: { toolCtx?: ToolContext; speak?: boolean; voiceId?: string | null }
 ): Promise<StreamReplyResult> {
   const token = agent.botToken;
 
@@ -1100,7 +1091,7 @@ export async function handleTelegramUpdate(
     const voiceId = boundChat.voiceId ?? agent.voiceId;
 
     const out = await streamReplyToChat(agent, chatId, messages, {
-      toolCtx: { agentKey: agent.key, chatId },
+      toolCtx: { agentKey: agent.key, chatId, voiceId },
       speak,
       voiceId,
     });

@@ -4,6 +4,7 @@ import {
   persistRegistry,
   refreshRegistry,
   touchAgent,
+  type RegisteredAgent,
 } from "@/lib/agent-registry";
 import { getPreset } from "@/lib/presets";
 import { normalizeBrainConfig } from "@/lib/brains";
@@ -11,12 +12,31 @@ import { isKnownPersonaVoice } from "@/lib/voice-personas";
 
 export const maxDuration = 30;
 
+/** Provider shape mirrors the wizard's AIProvider (BYOK — stored on the
+ *  gateway agent so Telegram replies use the same brains as the console). */
+function sanitizeProviders(raw: unknown): RegisteredAgent["providers"] | null {
+  if (!Array.isArray(raw)) return null;
+  const out = (raw as Record<string, unknown>[])
+    .filter((p) => p && typeof p === "object" && typeof p.baseUrl === "string" && typeof p.model === "string" && p.baseUrl.trim() && p.model.trim())
+    .slice(0, 10)
+    .map((p) => ({
+      label: typeof p.label === "string" ? p.label : undefined,
+      baseUrl: String(p.baseUrl).trim(),
+      apiKey: typeof p.apiKey === "string" ? p.apiKey : "",
+      model: String(p.model).trim(),
+      compat: p.compat === "anthropic" ? ("anthropic" as const) : ("openai" as const),
+    }));
+  return out as RegisteredAgent["providers"];
+}
+
 /**
  * Lightweight agent config updates from the portal — preset activation,
- * system prompt tweaks, voice persona — without re-pairing the bot.
+ * system prompt tweaks, voice persona, PROVIDER CHANGES — without
+ * re-pairing the bot.
  * Body: { ownerToken, presetId?: string | null, systemPrompt?: string,
  *         brains?: { hermes?: boolean, moltis?: boolean } | null,
- *         voiceId?: string | null, voiceRate?: number, voicePitch?: number }
+ *         voiceId?: string | null, voiceRate?: number, voicePitch?: number,
+ *         providers?: AIProvider[] }
  */
 export async function POST(req: NextRequest) {
   let body: {
@@ -27,6 +47,7 @@ export async function POST(req: NextRequest) {
     voiceId?: string | null;
     voiceRate?: number;
     voicePitch?: number;
+    providers?: unknown;
   };
   try {
     body = await req.json();
@@ -82,6 +103,19 @@ export async function POST(req: NextRequest) {
     agent.voicePitch = Math.max(-50, Math.min(50, Math.round(body.voicePitch)));
   }
 
+  /* Provider Passport — provider changes made in the portal (add / edit /
+     remove / reorder) reach the Telegram gateway WITHOUT re-pairing.
+     Before this, the gateway kept the pairing-time snapshot forever, so a
+     newly added custom provider was silently ignored and the bot kept
+     answering from the demo brain telling the user to add a key. */
+  if (body.providers !== undefined) {
+    const providers = sanitizeProviders(body.providers);
+    if (providers === null) {
+      return NextResponse.json({ ok: false, error: "providers must be an array" }, { status: 400 });
+    }
+    agent.providers = providers;
+  }
+
   touchAgent(agent);
   await persistRegistry();
 
@@ -94,5 +128,6 @@ export async function POST(req: NextRequest) {
     voiceId: agent.voiceId ?? null,
     voiceRate: agent.voiceRate ?? 0,
     voicePitch: agent.voicePitch ?? 0,
+    providers: agent.providers,
   });
 }

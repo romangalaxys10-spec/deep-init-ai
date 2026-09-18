@@ -153,6 +153,48 @@ export { uid, genPairingToken, genPortalToken, slugifyUser };
 
 const VOICE_SYNC_DEBOUNCE_MS = 900;
 let voiceSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let providerSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Serialized provider payload for the gateway (id/priority are local-only). */
+function providersForGateway(providers: AIProvider[]) {
+  return [...providers]
+    .sort((a, b) => a.priority - b.priority)
+    .map((p) => ({
+      label: p.label,
+      baseUrl: p.baseUrl,
+      apiKey: p.apiKey,
+      model: p.model,
+      compat: p.compat,
+    }));
+}
+
+/**
+ * Push provider changes (add / edit / remove / reorder) to the server-side
+ * gateway agent. Before this existed, the Telegram bot kept the
+ * pairing-time provider snapshot forever: a custom provider added in the
+ * portal was silently ignored and the bot kept answering from the demo
+ * brain while telling the user to "add your own provider key".
+ * Best-effort like the voice/preset sync; debounced for bursts.
+ */
+function scheduleProviderGatewaySync(): void {
+  if (typeof window === "undefined") return;
+  if (providerSyncTimer) clearTimeout(providerSyncTimer);
+  providerSyncTimer = setTimeout(async () => {
+    providerSyncTimer = null;
+    const s = useDeepInit.getState();
+    const ownerToken = s.profile.pairingToken;
+    if (!ownerToken) return; // local-only until paired
+    try {
+      await fetch("/api/agent/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ownerToken, providers: providersForGateway(s.providers) }),
+      });
+    } catch {
+      /* best-effort — the console still works locally */
+    }
+  }, VOICE_SYNC_DEBOUNCE_MS);
+}
 
 /**
  * Push the web picker's voice persona (and rate/pitch) to the server-side
@@ -236,10 +278,21 @@ export const useDeepInit = create<DeepInitState>()(
         set((s) => ({ channels: s.channels.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
       removeChannel: (id) => set((s) => ({ channels: s.channels.filter((c) => c.id !== id) })),
 
-      addProvider: (p) => set((s) => ({ providers: [...s.providers, p] })),
+      addProvider: (p) =>
+        set((s) => {
+          scheduleProviderGatewaySync();
+          return { providers: [...s.providers, p] };
+        }),
       updateProvider: (id, patch) =>
-        set((s) => ({ providers: s.providers.map((p) => (p.id === id ? { ...p, ...patch } : p)) })),
-      removeProvider: (id) => set((s) => ({ providers: s.providers.filter((p) => p.id !== id) })),
+        set((s) => {
+          scheduleProviderGatewaySync();
+          return { providers: s.providers.map((p) => (p.id === id ? { ...p, ...patch } : p)) };
+        }),
+      removeProvider: (id) =>
+        set((s) => {
+          scheduleProviderGatewaySync();
+          return { providers: s.providers.filter((p) => p.id !== id) };
+        }),
       moveProvider: (id, dir) =>
         set((s) => {
           const sorted = [...s.providers].sort((a, b) => a.priority - b.priority);
@@ -250,6 +303,7 @@ export const useDeepInit = create<DeepInitState>()(
           const b = sorted[swapWith];
           const swap = (p: AIProvider): AIProvider =>
             p.id === a.id ? { ...p, priority: b.priority } : p.id === b.id ? { ...p, priority: a.priority } : p;
+          scheduleProviderGatewaySync();
           return { providers: s.providers.map(swap) };
         }),
 

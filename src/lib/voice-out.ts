@@ -96,6 +96,10 @@ export function mdToSpeechText(md: string): string {
   // tables → drop separator rows, keep cell text
   t = t.replace(/^\s*\|?[-:|][-:|\s]*\|?\s*$/gm, "");
   t = t.replace(/\|/g, ", ");
+  // internal file paths (serverless artifacts like /public/generated/voice-x.wav)
+  // are NEVER speakable — strip before the voice mirror reads them aloud
+  t = t.replace(/(?:voice note|voice message|audio)\s*:\s*\S+/gi, "");
+  t = t.replace(/\/public\/generated\/\S+/g, "").replace(/\/tmp\/\S+/g, "");
   // collapse whitespace
   t = t.replace(/\n{2,}/g, ".\n").replace(/[ \t]+/g, " ").trim();
 
@@ -115,6 +119,9 @@ export interface SynthResult {
   bytes?: Uint8Array;
   via?: string;
   error?: string;
+  /** audio container — drives the Telegram send plan (wav → audio player,
+   *  mp3/ogg → voice bubble; see tg-media.voiceSendPlan) */
+  container?: "mp3" | "wav";
 }
 
 export interface SynthOptions {
@@ -131,7 +138,9 @@ export interface SynthOptions {
 
 /** z-ai SDK tier — best quality voices, needs cloud reachability.
  *  SDK quirk (probed live): create() returns a raw Response object and the
- *  endpoint only accepts response_format "wav" (mp3/ogg/opus → HTTP 400). */
+ *  endpoint only accepts response_format "wav" (mp3/ogg/opus → HTTP 400).
+ *  Output is WAV — never sent as a Telegram voice note (broken 0:00 bubble);
+ *  the delivery layer routes it through the audio player instead. */
 async function synthViaZai(text: string): Promise<SynthResult> {
   try {
     const { getZAI } = await import("./zai");
@@ -151,7 +160,7 @@ async function synthViaZai(text: string): Promise<SynthResult> {
       const b64 = rr.audio || rr.base64 || rr.data?.[0]?.base64;
       if (b64) bytes = Buffer.from(b64, "base64");
     }
-    if (bytes?.length) return { ok: true, bytes, via: "zai-tts" };
+    if (bytes?.length) return { ok: true, bytes, via: "zai-tts", container: "wav" };
     return { ok: false, error: "zai tts returned no audio" };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -188,7 +197,7 @@ async function synthViaEdge(
           audioStream.on("end", () => clearTimeout(t));
         });
         const audio = Buffer.concat(chunks);
-        if (audio.length) return { ok: true, bytes: new Uint8Array(audio), via: `edge-tts:${voice}` };
+        if (audio.length) return { ok: true, bytes: new Uint8Array(audio), via: `edge-tts:${voice}`, container: "mp3" };
         if (attempt === 0) await new Promise((r) => setTimeout(r, 900)); // throttle cool-off, then retry
         continue;
       } catch (e) {
@@ -202,11 +211,16 @@ async function synthViaEdge(
 }
 
 /**
- * Synthesize speakable text to audio bytes with the caller's persona:
- *  • persona picked  → Edge tier FIRST with that exact voice (+ rate/pitch),
- *    z-ai cloud tier only as the reliability fallback (different voice set)
- *  • no persona      → legacy chain: z-ai cloud first, keyless Edge second —
- *    voice delivery survives dead cloud egress either way
+ * Synthesize speakable text to audio bytes with the caller's persona.
+ *
+ * Edge tier FIRST — always. The old default (no persona picked → z-ai
+ * cloud first) caused BOTH production voice bugs: every unpicked chat
+ * was drowned in the z-ai fixed default voice (the "stuck Asian female"
+ * report), and the z-ai WAV payload sent as a voice note rendered as a
+ * broken 0:00 bubble. The keyless Edge tier carries the persona catalog,
+ * adapts to the spoken language, and outputs MP3 that Telegram can
+ * transcode into a real waveform bubble; the z-ai tier stays as the
+ * reliability fallback when Edge egress is blocked.
  */
 export async function synthesizeVoice(speakText: string, opts?: SynthOptions): Promise<SynthResult> {
   const text = speakText.trim();
@@ -214,16 +228,9 @@ export async function synthesizeVoice(speakText: string, opts?: SynthOptions): P
   const plan = personaVoicePlan(opts?.voiceId, text);
   const rate = Math.max(-50, Math.min(50, Math.round(opts?.rate ?? 0)));
   const pitch = Math.max(-50, Math.min(50, Math.round(opts?.pitch ?? 0)));
-  if (plan.personaPinned) {
-    const edge = await synthViaEdge(text, plan.edgeVoice, rate, pitch);
-    if (edge.ok) return edge;
-    const zai = await synthViaZai(text);
-    if (zai.ok) return zai;
-    return { ok: false, error: `${edge.error} | ${zai.error}` };
-  }
-  const zai = await synthViaZai(text);
-  if (zai.ok) return zai;
   const edge = await synthViaEdge(text, plan.edgeVoice, rate, pitch);
   if (edge.ok) return edge;
-  return { ok: false, error: `${zai.error} | ${edge.error}` };
+  const zai = await synthViaZai(text);
+  if (zai.ok) return zai;
+  return { ok: false, error: `${edge.error} | ${zai.error}` };
 }

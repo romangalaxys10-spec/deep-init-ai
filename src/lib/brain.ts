@@ -1,6 +1,6 @@
 import type { ChatRequest, FallbackStep } from "./types";
 import { getZAI } from "./zai";
-import { reflexReply } from "./reflex-brain";
+import { reflexReply, type ReflexContext } from "./reflex-brain";
 import { brainPromptBlock, type BrainConfig } from "./brains";
 import {
   AGENT_GUARDRAILS,
@@ -8,6 +8,7 @@ import {
   extractToolCalls,
   sanitizeAgentText,
   sanitizeStreamText,
+  TOOL_RESULTS_MARKER,
   type ToolContext,
 } from "./tools";
 
@@ -182,7 +183,33 @@ async function callAnthropic(
  *  TCP-connect for ~10s — unacceptable for chat/voice UX, so we race it. */
 const DEMO_CLOUD_TIMEOUT_MS = 4500;
 
-async function callDemoBrain(messages: Msg[]): Promise<CallResult> {
+/**
+ * The LAST real user turn + the tool results gathered for it.
+ *
+ * Synthetic messages injected by the engine (tool-results feedback,
+ * answer nudges) are skipped — they are engine plumbing, and echoing
+ * them back as "I heard you: [AUTOMATED TOOL RESULTS…]" was a
+ * production bug. The tool results themselves are returned separately
+ * so the reflex tier can answer from real gathered data.
+ */
+export function extractReflexContext(messages: Msg[]): { userText: string; toolResults: string } {
+  let userText = "";
+  let toolResults = "";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user" || typeof m.content !== "string") continue;
+    if (m.content.includes(NUDGE_MARKER)) continue;
+    if (m.content.startsWith(TOOL_RESULTS_MARKER)) {
+      if (!toolResults) toolResults = m.content;
+      continue;
+    }
+    userText = m.content;
+    break;
+  }
+  return { userText, toolResults };
+}
+
+async function callDemoBrain(messages: Msg[], reflexCtx?: { hasProviders?: boolean; providerError?: string }): Promise<CallResult> {
   const started = Date.now();
 
   const cloud = (async (): Promise<CallResult> => {
@@ -212,25 +239,27 @@ async function callDemoBrain(messages: Msg[]): Promise<CallResult> {
     setTimeout(() => resolve("timeout"), DEMO_CLOUD_TIMEOUT_MS)
   );
 
+  const reflexFrom = () => {
+    const { userText, toolResults } = extractReflexContext(messages);
+    const ctx: ReflexContext = {
+      toolResults: toolResults || undefined,
+      hasProviders: reflexCtx?.hasProviders,
+      providerError: reflexCtx?.providerError,
+    };
+    return reflexReply(userText, ctx);
+  };
+
   const winner = await Promise.race([cloud, timer]);
   if (winner === "timeout") {
     /* Cloud tier too slow or unreachable — the agent NEVER goes mute and
        never leaves the user hanging: answer from the offline reflex now. */
-    const lastUser = [...messages]
-      .reverse()
-      .find((m) => m.role === "user" && !m.content.includes(NUDGE_MARKER));
-    const userText = typeof lastUser?.content === "string" ? lastUser.content : "";
-    const reflex = reflexReply(userText);
+    const reflex = reflexFrom();
     return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started };
   }
   if (winner.ok) return winner;
 
   /* cloud answered quickly but failed → reflex */
-  const lastUser = [...messages]
-    .reverse()
-    .find((m) => m.role === "user" && !m.content.includes(NUDGE_MARKER));
-  const userText = typeof lastUser?.content === "string" ? lastUser.content : "";
-  const reflex = reflexReply(userText);
+  const reflex = reflexFrom();
   return { ok: true, content: reflex.content, via: reflex.via, latencyMs: Date.now() - started };
 }
 
@@ -462,8 +491,12 @@ async function callAnthropicStream(
 }
 
 /** Non-streaming demo brain — content is replayed through onDelta so gateways get a uniform stream. */
-async function callDemoBrainReplayed(messages: Msg[], onEvent?: StreamOpts["onEvent"]): Promise<CallResult> {
-  const demo = await callDemoBrain(messages);
+async function callDemoBrainReplayed(
+  messages: Msg[],
+  onEvent?: StreamOpts["onEvent"],
+  reflexCtx?: { hasProviders?: boolean; providerError?: string }
+): Promise<CallResult> {
+  const demo = await callDemoBrain(messages, reflexCtx);
   if (demo.ok && demo.content && onEvent) {
     // replay in slices so the preview streaming still feels alive
     const text = demo.content;
@@ -511,7 +544,10 @@ async function runChainOnceStreaming(
   }
 
   if (allowDemoBrain !== false) {
-    const demo = await callDemoBrainReplayed(messages, onEvent);
+    const demo = await callDemoBrainReplayed(messages, onEvent, {
+      hasProviders: providers.length > 0,
+      providerError: fallbackChain.find((s) => !s.ok)?.error,
+    });
     fallbackChain.push({
       provider: demo.via || "Deep-init demo brain",
       model: "glm",
@@ -690,7 +726,10 @@ async function runChainOnce(
   }
 
   if (allowDemoBrain !== false) {
-    const demo = await callDemoBrain(messages);
+    const demo = await callDemoBrain(messages, {
+      hasProviders: providers.length > 0,
+      providerError: fallbackChain.find((s) => !s.ok)?.error,
+    });
     fallbackChain.push({
       provider: demo.via || "Deep-init demo brain",
       model: "glm",

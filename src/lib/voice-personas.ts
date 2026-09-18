@@ -74,7 +74,9 @@ export function detectSpeechLang(text: string): "ru" | "he" | "en" {
 }
 
 /**
- * Resolve the concrete neural voice for a persona + text pair:
+ * Resolve the Edge voice for a given persona + text pair (the Edge tier
+ * is now ALWAYS the primary synthesis path — the voice is deterministic
+ * instead of the z-ai fixed default that drowned every unpicked chat):
  * the persona's gender/style is preserved, the locale follows the
  * text (an English persona still speaks Russian with a Russian voice).
  * Without a known persona it falls back to a locale-appropriate default.
@@ -91,18 +93,20 @@ export function localeVoiceFor(voiceId: string | null | undefined, text: string)
 /* ---------------- synthesis tier plan (testable, pure) ---------------- */
 
 export type VoiceTierPlan = {
-  /** edge voice to request (always defined) */
+  /** edge voice to request (always defined — Edge is the primary tier) */
   edgeVoice: string;
-  /** true → Edge tier goes FIRST (persona pinned), z-ai is the fallback */
+  /** true → the voice comes from an explicit persona pick (deterministic
+   *  sound); false → locale-appropriate default, still Edge-first */
   personaPinned: boolean;
 };
 
 /**
- * Which synthesis order and voice to use for a given persona selection:
- *  • known persona  → Edge FIRST with that persona (deterministic sound —
- *    the z-ai tier cannot reproduce these voices and would drown the pick
- *    in its fixed default), z-ai only as reliability fallback
- *  • no persona     → legacy chain (z-ai first, Edge default second)
+ * Which Edge voice to use for a given persona selection:
+ *  • known persona  → that persona's voice, locale-adapted to the text
+ *    (deterministic sound — the z-ai tier cannot reproduce these voices
+ *    and previously drowned every pick in its fixed default)
+ *  • no persona     → locale-appropriate default voice
+ * The z-ai cloud tier is a reliability-only fallback in voice-out.ts.
  */
 export function personaVoicePlan(voiceId: string | null | undefined, text: string): VoiceTierPlan {
   if (isKnownPersonaVoice(voiceId)) {

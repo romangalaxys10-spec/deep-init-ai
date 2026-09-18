@@ -19,21 +19,67 @@ export interface ReflexReply {
   via: string;
 }
 
-const OFFLINE_NOTE = [
-  "ℹ️ **Offline reflex mode** — the cloud demo brain isn't reachable from this deployment (no egress to the model endpoint). Init itself stays fully up: the Telegram gateway, tool execution, memory and pairing all keep running.",
-  "",
-  "For full LLM answers on this deployment, add your own provider key in the wizard (step 3) — OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Mistral, Ollama, anything OpenAI-compatible or Anthropic-native. Keys are BYOK: they live in your browser and are only used in-flight.",
-].join("\n");
+/** Context that makes the reflex layer honest AND useful:
+ *  • toolResults  — results already gathered by server-side tools, so the
+ *    reflex can answer from REAL data instead of claiming it can't
+ *  • hasProviders — the user DID wire a provider; the note must stop
+ *    telling them to "add your own provider key" (production report)
+ *  • providerError — why that provider didn't answer */
+export interface ReflexContext {
+  toolResults?: string;
+  hasProviders?: boolean;
+  providerError?: string;
+  agentName?: string;
+}
 
-function reflexGreeting(agentName: string): string {
+function offlineNote(ctx?: ReflexContext): string {
+  if (ctx?.hasProviders) {
+    const err = (ctx.providerError || "no response").slice(0, 220);
+    return [
+      "ℹ️ **Degraded mode** — your own provider didn't answer just now, so this came from the offline reflex tier. The gateway itself stays fully up: Telegram, tool execution, memory and pairing all keep running.",
+      "",
+      `Last provider error: \`${err}\``,
+      "",
+      "Check the provider key / base URL / model in the wizard (step 3) — anything OpenAI-compatible or Anthropic-native works, and the demo brain covers you meanwhile.",
+    ].join("\n");
+  }
   return [
-    `Hey — ${agentName} here. 👋 I'm your 24×7 personal agent: you talk to me on Telegram or right here in the console, and I run tasks for you around the clock.`,
+    "ℹ️ **Offline reflex mode** — no cloud brain is wired on this deployment yet (the built-in demo brain covers what it can reach). The gateway itself stays fully up: the Telegram gateway, tool execution, memory and pairing all keep running.",
     "",
-    "Right now I'm answering from my **offline reflex tier** (the configured cloud brains aren't reachable from this deployment), so keep it simple: greetings, math, time/date, status. Wire a provider key in the wizard and I'll answer anything at full strength.",
+    "For full LLM answers, add your own provider key in the wizard (step 3) — OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Mistral, Ollama, anything OpenAI-compatible or Anthropic-native. Keys are BYOK: they live in your browser and are only used in-flight.",
   ].join("\n");
 }
 
-function reflexIdentity(agentName: string): string {
+/**
+ * Turn raw tool feedback into a genuinely useful reflex answer: the tools
+ * already ran (search/fetch/calc), so quote the gathered material instead
+ * of the old "needs a cloud brain" shrug.
+ */
+function toolResultAnswer(toolResults: string): string {
+  const body = toolResults
+    .replace(/^\s*\[AUTOMATED TOOL RESULTS[^\]]*\]\s*/i, "")
+    .replace(/Use these results silently[^\n]*$/im, "")
+    .trim();
+  if (!body) return "";
+  const clip = body.length > 1600 ? `${body.slice(0, 1600)}…` : body;
+  return [
+    "My tools already ran for this — here's what they gathered:",
+    "",
+    clip,
+    "",
+    "(offline reflex tier: the material above is real tool output, but summarizing it in natural language needs a cloud brain — wire a provider for the polished version)",
+  ].join("\n");
+}
+
+function reflexGreeting(agentName: string, ctx?: ReflexContext): string {
+  return [
+    `Hey — ${agentName} here. 👋 I'm your 24×7 personal agent: you talk to me on Telegram or right here in the console, and I run tasks for you around the clock.`,
+    "",
+    `Right now I'm answering from my **offline reflex tier**${ctx?.hasProviders ? " (your configured cloud brain didn't answer just now)" : " (no cloud brain is wired on this deployment yet)"}, so keep it simple: greetings, math, time/date, status. ${ctx?.hasProviders ? "Check the provider key in the wizard and I'll answer anything at full strength." : "Wire a provider key in the wizard and I'll answer anything at full strength."}`,
+  ].join("\n");
+}
+
+function reflexIdentity(agentName: string, ctx?: ReflexContext): string {
   return [
     `I'm **${agentName}** — a Deep-init personal agent (v1.0.0 · agent kernel).`,
     "",
@@ -42,11 +88,11 @@ function reflexIdentity(agentName: string): string {
     "• **Real tools** — web search, page reading, code files, voice, images, reminders, SSH machines via pair-tunnel",
     "• **Self-skilling** — writes new skills when a task needs one",
     "",
-    OFFLINE_NOTE,
+    offlineNote(ctx),
   ].join("\n");
 }
 
-function reflexHelp(): string {
+function reflexHelp(ctx?: ReflexContext): string {
   return [
     "**What I can do right now (offline reflex tier):**",
     "",
@@ -57,7 +103,7 @@ function reflexHelp(): string {
     "",
     "**With a provider wired (wizard step 3):** everything — research briefings, code, files sent as Telegram documents, voice, vision, reminders, cron jobs, SSH ops on your linked machines.",
     "",
-    OFFLINE_NOTE,
+    offlineNote(ctx),
   ].join("\n");
 }
 
@@ -88,7 +134,8 @@ function fmtNum(n: number): string {
   return String(rounded);
 }
 
-export function reflexReply(userText: string, agentName = "Init"): ReflexReply {
+export function reflexReply(userText: string, ctx?: ReflexContext): ReflexReply {
+  const agentName = ctx?.agentName || "Init";
   const text = (userText || "").trim();
   const low = text.toLowerCase();
   const via = "Deep-init demo brain (offline reflex)";
@@ -100,6 +147,10 @@ export function reflexReply(userText: string, agentName = "Init"): ReflexReply {
     };
   }
 
+  /* the tools already gathered real material → answer from it first:
+   * this outranks every canned reflex except pure greetings/math */
+  const toolAnswer = ctx?.toolResults ? toolResultAnswer(ctx.toolResults) : "";
+
   /* greetings — EN / RU / HE */
   if (
     /^(hi|hiya|hello|hey|yo|sup|good\s(morning|afternoon|evening)|howdy)\b/i.test(low) ||
@@ -107,7 +158,7 @@ export function reflexReply(userText: string, agentName = "Init"): ReflexReply {
     /^(שלום|היי|בוקר טוב|ערב טוב)/i.test(low) ||
     /^\/start$/i.test(low)
   ) {
-    return { via, content: reflexGreeting(agentName) };
+    return { via, content: reflexGreeting(agentName, ctx) };
   }
 
   /* identity / capabilities */
@@ -116,7 +167,7 @@ export function reflexReply(userText: string, agentName = "Init"): ReflexReply {
     /(кто ты|что ты умеешь|как тебя зовут)/i.test(low) ||
     /(מי אתה|מה אתה יודע|מה אתה עושה)/i.test(low)
   ) {
-    return { via, content: reflexIdentity(agentName) };
+    return { via, content: reflexIdentity(agentName, ctx) };
   }
 
   /* help / status */
@@ -126,16 +177,18 @@ export function reflexReply(userText: string, agentName = "Init"): ReflexReply {
         via,
         content: [
           "**Status**",
-          "• answering tier: offline reflex (cloud demo brain unreachable from this deployment)",
+          ctx?.hasProviders
+            ? "• answering tier: offline reflex (your provider didn't answer — see the error below)"
+            : "• answering tier: offline reflex (no cloud brain wired on this deployment yet)",
           "• telegram gateway: running (webhook / poll bridge per origin)",
           "• tools: armed (web_search, web_fetch, calc — executed server-side)",
           "• memory: persistent",
           "",
-          OFFLINE_NOTE,
+          offlineNote(ctx),
         ].join("\n"),
       };
     }
-    return { via, content: reflexHelp() };
+    return { via, content: reflexHelp(ctx) };
   }
 
   /* time / date */
@@ -171,15 +224,18 @@ export function reflexReply(userText: string, agentName = "Init"): ReflexReply {
     }
   }
 
-  /* honest fallback — never fabricate an LLM answer */
+  /* honest fallback — real tool output when we have it, never a fake LLM answer */
+  if (toolAnswer) {
+    return { via, content: `${toolAnswer}\n\n---\n\n${offlineNote(ctx)}` };
+  }
   return {
     via,
     content: [
       `I heard you: “${text.slice(0, 220)}${text.length > 220 ? "…" : ""}”`,
       "",
-      "Answering that at full strength needs a cloud brain, which isn't reachable from this deployment — and I don't fake answers.",
+      "Answering that at full strength needs a cloud brain, which isn't answering on this deployment right now — and I don't fake answers.",
       "",
-      OFFLINE_NOTE,
+      offlineNote(ctx),
     ].join("\n"),
   };
 }
