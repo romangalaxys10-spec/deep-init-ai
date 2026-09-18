@@ -72,6 +72,11 @@ export interface RegisteredAgent {
   presetId?: string;
   /** enabled cognition packs (Hermes / Moltis brains) */
   brains?: BrainConfig;
+  /** Active-brain passport — providerKey() of the brain that answers FIRST
+   *  (chosen via the web console chooser or the Telegram /model picker);
+   *  undefined → pure priority order. The rest of the chain stays as
+   *  fallback, so a dead active brain still degrades gracefully. */
+  activeProvider?: string;
   /** Voice Persona Passport — account-level voice persona synced from the
    *  web console picker; every voice note the gateway speaks uses it. */
   voiceId?: string;
@@ -366,6 +371,7 @@ export function registerAgent(input: RegisterInput): RegisteredAgent {
     reminders: prev?.reminders ?? [],
     presetId: prev?.presetId,
     brains: prev?.brains,
+    activeProvider: prev?.activeProvider,
     voiceId: input.voiceId !== undefined ? input.voiceId : prev?.voiceId,
     voiceRate: input.voiceRate !== undefined ? input.voiceRate : prev?.voiceRate,
     voicePitch: input.voicePitch !== undefined ? input.voicePitch : prev?.voicePitch,

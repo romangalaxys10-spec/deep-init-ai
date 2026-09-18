@@ -13,6 +13,7 @@ import {
   ArrowUp,
   Boxes,
   Cable,
+  Cpu,
   Loader2,
   Plus,
   Plug2,
@@ -20,6 +21,7 @@ import {
   RefreshCcw,
   Server,
   Trash2,
+  Zap,
 } from "lucide-react";
 import { useState } from "react";
 import { MonoLabel, Panel, StatusDot } from "./ui-bits";
@@ -42,6 +44,8 @@ export function BrainsPanel() {
   const updateProvider = useDeepInit((s) => s.updateProvider);
   const removeProvider = useDeepInit((s) => s.removeProvider);
   const moveProvider = useDeepInit((s) => s.moveProvider);
+  const activeProviderId = useDeepInit((s) => s.activeProviderId);
+  const setActiveProvider = useDeepInit((s) => s.setActiveProvider);
   const logActivity = useDeepInit((s) => s.logActivity);
   const { toast } = useToast();
 
@@ -106,8 +110,62 @@ export function BrainsPanel() {
     toast({ title: "Provider added", description: `${form.label.trim()} joins the chain at #${nextPriority}.` });
   };
 
+  const pick = (id: string | null) => {
+    const label = id ? `${providers.find((p) => p.id === id)?.label || "brain"} answers first` : "auto — priority order";
+    setActiveProvider(id);
+    toast({ title: "Active brain updated", description: `${label}. Synced to Telegram (/model).` });
+  };
+
+  const activePicked = providers.find((p) => p.id === activeProviderId);
+
   return (
     <div className="space-y-4">
+      {/* Active-brain chooser — the point when more than one brain is added */}
+      {sorted.length > 1 && (
+        <Panel className="p-5">
+          <div className="flex items-center gap-2">
+            <Cpu className="h-4 w-4 text-primary" />
+            <MonoLabel>active brain — who answers first</MonoLabel>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Several brains are wired in. Pick which one answers first — the rest of the chain stays as
+            fallback if the active brain fails. The choice syncs live to Telegram (send /model there).
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => pick(null)}
+              aria-pressed={activeProviderId === null}
+              className={`rounded-full border px-3 py-1.5 font-mono text-[11px] transition-colors ${
+                activeProviderId === null
+                  ? "border-primary/60 bg-primary/10 text-foreground"
+                  : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+              }`}
+            >
+              <Zap className="mr-1 inline h-3 w-3" /> auto — priority order{activeProviderId === null ? " ✅" : ""}
+            </button>
+            {sorted.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => pick(p.id)}
+                aria-pressed={activeProviderId === p.id}
+                className={`rounded-full border px-3 py-1.5 font-mono text-[11px] transition-colors ${
+                  activeProviderId === p.id
+                    ? "border-primary/60 bg-primary/10 text-foreground"
+                    : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                }`}
+              >
+                🧠 {p.label} · {p.model}{activeProviderId === p.id ? " ✅" : ""}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 font-mono text-[10px] text-muted-foreground">
+            current: {activePicked ? `${activePicked.label} (${activePicked.model}) answers first` : "auto — chain runs in priority order"}
+          </p>
+        </Panel>
+      )}
+
       <Panel className="p-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -141,7 +199,12 @@ export function BrainsPanel() {
                     <span className="font-mono text-[10px] text-muted-foreground">#{i + 1}</span>
                     <StatusDot ok={p.lastStatus !== "error"} />
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{p.label}</div>
+                      <div className="truncate text-sm font-medium">
+                        {p.label}
+                        {p.id === activeProviderId && (
+                          <span className="ml-2 rounded-full border border-primary/50 bg-primary/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-primary">active</span>
+                        )}
+                      </div>
                       <div className="truncate font-mono text-[11px] text-muted-foreground">
                         {p.model} · {p.compat}
                         {p.lastLatencyMs ? ` · ${p.lastLatencyMs}ms` : ""}

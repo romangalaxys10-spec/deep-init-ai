@@ -9,6 +9,7 @@ import {
 import { getPreset } from "@/lib/presets";
 import { normalizeBrainConfig } from "@/lib/brains";
 import { isKnownPersonaVoice } from "@/lib/voice-personas";
+import { providerKey } from "@/lib/active-provider";
 
 export const maxDuration = 30;
 
@@ -36,7 +37,7 @@ function sanitizeProviders(raw: unknown): RegisteredAgent["providers"] | null {
  * Body: { ownerToken, presetId?: string | null, systemPrompt?: string,
  *         brains?: { hermes?: boolean, moltis?: boolean } | null,
  *         voiceId?: string | null, voiceRate?: number, voicePitch?: number,
- *         providers?: AIProvider[] }
+ *         providers?: AIProvider[], activeProvider?: string | null }
  */
 export async function POST(req: NextRequest) {
   let body: {
@@ -48,6 +49,7 @@ export async function POST(req: NextRequest) {
     voiceRate?: number;
     voicePitch?: number;
     providers?: unknown;
+    activeProvider?: string | null;
   };
   try {
     body = await req.json();
@@ -114,6 +116,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "providers must be an array" }, { status: 400 });
     }
     agent.providers = providers;
+    /* the active pick must reference a provider that still exists */
+    if (agent.activeProvider && !providers.some((p) => providerKey(p) === agent.activeProvider)) {
+      agent.activeProvider = undefined;
+    }
+  }
+
+  /* Active-Brain passport — the chooser in the portal (and the Telegram
+     /model picker) decides WHICH brain answers first. A provider-set push
+     alone never touches this; only an explicit activeProvider field does. */
+  if (body.activeProvider !== undefined) {
+    const key = typeof body.activeProvider === "string" ? body.activeProvider.trim() : "";
+    agent.activeProvider = key && agent.providers.some((p) => providerKey(p) === key) ? key : undefined;
   }
 
   touchAgent(agent);
@@ -129,5 +143,6 @@ export async function POST(req: NextRequest) {
     voiceRate: agent.voiceRate ?? 0,
     voicePitch: agent.voicePitch ?? 0,
     providers: agent.providers,
+    activeProvider: agent.activeProvider ?? null,
   });
 }

@@ -21,6 +21,7 @@ import { transcribeAudio } from "./asr";
 import { extractVoiceBlocks, mdToSpeechText, synthesizeVoice, type SynthResult, type VoiceOutMode } from "./voice-out";
 import { personaByVoice, personaLabel, VOICE_PERSONAS } from "./voice-personas";
 import { consumeVoiceDelivered } from "./voice-ledger";
+import { orderProviders, providerDisplayName, providerKey } from "./active-provider";
 import { deliverVoiceBytes, sniffAudioContainer, tgSendAudioBytes, tgSendPhotoBytes, tgSendVoiceBytes } from "./tg-media";
 import type { ToolContext } from "./tools";
 
@@ -415,6 +416,61 @@ async function sendVoicePicker(
   }
 }
 
+/* ---------------- active-brain picker (provider / model chooser) ---------------- */
+
+/** Short per-provider button label, e.g. "🧠 My GPT · gpt-4o-mini". */
+function brainButtonLabel(p: RegisteredAgent["providers"][number], active: boolean): string {
+  const base = `🧠 ${providerDisplayName(p)}`.slice(0, 60);
+  return active ? `${base} ✅` : base;
+}
+
+/** The picker message text — shows the currently active brain. */
+function modelPickerText(agent: RegisteredAgent): string {
+  const chosen = agent.providers.find((p) => providerKey(p) === agent.activeProvider);
+  return [
+    "🧠 Brains — which provider/model answers",
+    `Current: ${chosen ? providerDisplayName(chosen) : "auto (priority order)"}`,
+    "",
+    "Tap a brain to make it answer first. The rest of the chain stays as fallback — if the active brain fails, the next one takes over.",
+    "Synced with the web console's Brains tab chooser.",
+  ].join("\n");
+}
+
+function modelPickerMarkup(agent: RegisteredAgent) {
+  const rows: { text: string; callback_data: string }[][] = [];
+  agent.providers.forEach((p, idx) => {
+    rows.push([
+      {
+        text: brainButtonLabel(p, agent.activeProvider !== undefined && providerKey(p) === agent.activeProvider),
+        callback_data: `mp:${idx}`,
+      },
+    ]);
+  });
+  rows.push([{ text: agent.activeProvider ? "🔹 Auto (priority order)" : "🔹 Auto (priority order) ✅", callback_data: "mp:auto" }]);
+  return { inline_keyboard: rows };
+}
+
+/** Send (or re-render) the active-brain picker with inline buttons. */
+async function sendModelPicker(
+  agent: RegisteredAgent,
+  chatId: number,
+  editMessageId?: number
+): Promise<void> {
+  const body = {
+    chat_id: chatId,
+    text: modelPickerText(agent),
+    reply_markup: modelPickerMarkup(agent),
+    disable_web_page_preview: true,
+  };
+  const r = editMessageId
+    ? await tgCall(agent.botToken, "editMessageText", { ...body, message_id: editMessageId })
+    : await tgCall(agent.botToken, "sendMessage", body);
+  if (!r.ok && editMessageId) {
+    // message too old to edit → send a fresh picker instead
+    await tgCall(agent.botToken, "sendMessage", body);
+  }
+}
+
 const EDIT_MIN_INTERVAL_MS = 1_600; // Telegram rate-friendliness
 const EDIT_MIN_NEW_CHARS = 48;
 
@@ -558,7 +614,10 @@ async function streamReplyToChat(
   };
 
   const result = await runAgentChainStreaming({
-    providers: agent.providers,
+    // Active-brain passport: the chosen brain answers FIRST (picked via the
+    // web console chooser or /model here in Telegram); the rest of the chain
+    // keeps its relative order as fallback.
+    providers: orderProviders(agent.providers, agent.activeProvider),
     messages,
     allowDemoBrain: agent.allowDemoBrain,
     brains: agent.brains,
@@ -860,6 +919,28 @@ async function handleCommand(
     );
     return { handled: "hint", replyPreview: "voice picker sent" };
   }
+  if (cmd === "/model" || cmd === "/models" || cmd === "/brains") {
+    // active-brain picker — choose WHICH provider/model answers first
+    // (owner-only: whitelist users must not retarget the owner's chain)
+    if (chat.mode !== "owner") {
+      await replyAndRecord(
+        agent,
+        chat.chatId,
+        "Only the owner can switch the active brain — but your messages still reach me. 🧠"
+      );
+      return { handled: "hint", replyPreview: "model picker denied (non-owner)" };
+    }
+    if (!agent.providers.length) {
+      await replyAndRecord(
+        agent,
+        chat.chatId,
+        "No custom brains yet — I run on the built-in demo brain. The owner can add providers in the web console's Brains tab."
+      );
+      return { handled: "hint", replyPreview: "model picker empty" };
+    }
+    await sendModelPicker(agent, chat.chatId);
+    return { handled: "hint", replyPreview: "model picker sent" };
+  }
   if (cmd === "/help") {
     await replyAndRecord(
       agent,
@@ -875,6 +956,7 @@ async function handleCommand(
         "",
         "Commands:",
         "/status — what I am and what's wired",
+        "/model — pick which brain (provider/model) answers first",
         "/voice — voice settings: persona picker + reply mode (same voices as the web console)",
         "/reset — clear this thread's memory",
         "/help — this list",
@@ -883,6 +965,7 @@ async function handleCommand(
     return { handled: "hint", replyPreview: "/help" };
   }
   if (cmd === "/status") {
+    const active = agent.providers.find((p) => providerKey(p) === agent.activeProvider);
     const prov = agent.providers.length
       ? agent.providers.map((p) => `${p.label || p.model}${p.model ? ` (${p.model})` : ""}`).join(", ")
       : "built-in demo brain";
@@ -895,6 +978,7 @@ async function handleCommand(
         `• Owner: ${agent.ownerName}`,
         `• Your context: ${chat.mode}${agent.presetId ? ` • preset: ${agent.presetId}` : ""}`,
         `• Brains: ${prov}`,
+        `• Active brain: ${active ? providerDisplayName(active) : "auto (priority order)"}`,
         `• Tools: web_search, web_fetch, image_search, image_gen, tts, remember/recall, remind`,
         `• Memory: ${(agent.memory ?? []).length} facts • Pending reminders: ${pending}`,
         `• Deliverables: formatted markdown, code files, images, voice notes`,
@@ -910,8 +994,9 @@ async function handleCommand(
 }
 
 /**
- * Inline-keyboard button presses (voice persona / reply-mode picker).
- * vp:<voice|default> — persona pick; vm:<mode> — voice-reply mode pick.
+ * Inline-keyboard button presses (voice persona / reply-mode / brain pickers).
+ * vp:<voice|default> — persona pick; vm:<mode> — voice-reply mode pick;
+ * mp:<idx|auto> — active-brain (provider/model) pick, owner-only.
  */
 async function handleVoiceCallback(
   botToken: string,
@@ -931,6 +1016,36 @@ async function handleVoiceCallback(
   const data = (cb.data || "").trim();
   const vp = data.match(/^vp:(.+)$/);
   const vm = data.match(/^vm:(auto|on|off)$/);
+  const mp = data.match(/^mp:(\d+|auto)$/);
+
+  if (mp) {
+    // Active-brain pick — owner-only (whitelist users must not retarget
+    // the owner's provider chain). idx resolves at TAP time against the
+    // current provider list, so portal edits made after the picker was
+    // rendered can't bind a stale choice.
+    if (chat.mode !== "owner") {
+      await tgAnswerCallback(botToken, cb.id, "Only the owner can switch the active brain");
+      return { handled: "hint", replyPreview: "brain pick denied (non-owner)" };
+    }
+    if (mp[1] === "auto") {
+      agent.activeProvider = undefined;
+      touchAgent(agent);
+      await tgAnswerCallback(botToken, cb.id, "Brains: auto — priority order");
+      await sendModelPicker(agent, chatId, cb.message?.message_id);
+      return { handled: "hint", replyPreview: "activeProvider → auto" };
+    }
+    const idx = Number(mp[1]);
+    const p = agent.providers[idx];
+    if (!p) {
+      await tgAnswerCallback(botToken, cb.id, "That brain no longer exists — re-open /model");
+      return { handled: "hint", replyPreview: `unknown brain idx ${mp[1]}` };
+    }
+    agent.activeProvider = providerKey(p);
+    touchAgent(agent);
+    await tgAnswerCallback(botToken, cb.id, `Active brain: ${providerDisplayName(p)}`);
+    await sendModelPicker(agent, chatId, cb.message?.message_id);
+    return { handled: "hint", replyPreview: `activeProvider → ${providerDisplayName(p)}` };
+  }
 
   if (vp) {
     const voiceId = vp[1] === "default" ? undefined : vp[1];
@@ -972,7 +1087,7 @@ export async function handleTelegramUpdate(
   update: TelegramUpdate,
   botToken: string
 ): Promise<UpdateOutcome> {
-  /* 0) inline-keyboard button presses (voice persona picker) */
+  /* 0) inline-keyboard button presses (voice persona + brain pickers) */
   if (update.callback_query?.data) {
     return handleVoiceCallback(botToken, update.callback_query);
   }

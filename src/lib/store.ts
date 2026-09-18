@@ -23,6 +23,7 @@ import { getPreset, presetPromptBlock } from "./presets";
 import { DEFAULT_BRAIN_CONFIG, normalizeBrainConfig, type BrainConfig, type BrainId } from "./brains";
 import { genPairingToken, genPortalToken, slugifyUser } from "./tokens";
 import { VOICE_PERSONAS } from "./voice-personas";
+import { providerKey } from "./active-provider";
 
 export const BUILTIN_TOOLS: AgentTool[] = [
   { id: "bi-web", kind: "builtin", name: "Web Search & Fetch", enabled: true, status: "ok", detail: "Search, open and extract any page" },
@@ -94,6 +95,11 @@ interface DeepInitState {
   activePreset: string | null;
   /** enabled cognition packs (Hermes / Moltis brains) */
   brains: BrainConfig;
+  /** Active-brain chooser — provider id that answers FIRST in the fallback
+   *  chain (null = pure priority order). Synced to the Telegram gateway via
+   *  the Active-Brain passport (/api/agent/config), where /model taps set
+   *  the same field on the server-side agent. */
+  activeProviderId: string | null;
 
   setView: (v: View) => void;
   setWizardStep: (s: number) => void;
@@ -128,6 +134,10 @@ interface DeepInitState {
   removeWhitelistUser: (id: string) => void;
   updateWhitelistUser: (id: string, patch: Partial<WhitelistUser>) => void;
   setUiLang: (l: Lang) => void;
+  /** Active-brain chooser: pick which provider/model answers first
+   *  (null = auto, priority order). Persists locally and pushes the
+   *  choice to the server-side gateway agent (best-effort). */
+  setActiveProvider: (id: string | null) => void;
   /** activate/deactivate a preset: updates local state, the merged system
    *  prompt and the server-side gateway agent (best-effort API push) */
   activatePreset: (id: string | null) => Promise<{ ok: boolean; error?: string }>;
@@ -267,6 +277,7 @@ export const useDeepInit = create<DeepInitState>()(
       uiLang: "en",
       activePreset: null,
       brains: { hermes: false, moltis: false },
+      activeProviderId: null,
 
       setHydrated: () => set({ hydrated: true }),
       setView: (view) => set({ view }),
@@ -291,7 +302,11 @@ export const useDeepInit = create<DeepInitState>()(
       removeProvider: (id) =>
         set((s) => {
           scheduleProviderGatewaySync();
-          return { providers: s.providers.filter((p) => p.id !== id) };
+          return {
+            providers: s.providers.filter((p) => p.id !== id),
+            // the active pick must keep pointing at an existing brain
+            activeProviderId: s.activeProviderId === id ? null : s.activeProviderId,
+          };
         }),
       moveProvider: (id, dir) =>
         set((s) => {
@@ -365,6 +380,29 @@ export const useDeepInit = create<DeepInitState>()(
         set((s) => ({ whitelist: s.whitelist.map((w) => (w.id === id ? { ...w, ...patch } : w)) })),
 
       setUiLang: (l) => set({ uiLang: l }),
+
+      setActiveProvider: (id) => {
+        set({ activeProviderId: id });
+        const s = get();
+        const picked = id ? s.providers.find((p) => p.id === id) : null;
+        s.logActivity({
+          kind: "provider",
+          title: picked ? `Active brain: ${picked.label}` : "Active brain: auto (priority order)",
+          detail: picked ? `${picked.model} answers first — synced to Telegram (/model)` : "the fallback chain runs in priority order",
+        });
+        // Active-Brain passport — push the choice to the gateway agent so
+        // Telegram (/model) and the console agree on who answers first.
+        // Immediate (not debounced): a single deliberate tap, like preset/brain sync.
+        const ownerToken = s.profile.pairingToken;
+        if (!ownerToken || typeof window === "undefined") return; // local-only until paired
+        void fetch("/api/agent/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ownerToken, activeProvider: picked ? providerKey(picked) : null }),
+        }).catch(() => {
+          /* best-effort — the picker still works locally */
+        });
+      },
 
       activatePreset: async (id) => {
         const preset = getPreset(id);
@@ -465,6 +503,7 @@ export const useDeepInit = create<DeepInitState>()(
           whitelist: [],
           // language preference survives a factory reset
           uiLang: get().uiLang,
+          activeProviderId: null,
         }),
     }),
     {
@@ -490,6 +529,7 @@ export const useDeepInit = create<DeepInitState>()(
         uiLang: s.uiLang,
         activePreset: s.activePreset,
         brains: s.brains,
+        activeProviderId: s.activeProviderId,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { buildSystemPrompt, uid, useDeepInit } from "@/lib/store";
+import { orderProviders } from "@/lib/active-provider";
 import { useT } from "@/lib/i18n";
 import type { ChatMessage, FallbackStep } from "@/lib/types";
 import { AlertTriangle, CornerDownLeft, Loader2, Send, TerminalSquare, Volume2 } from "lucide-react";
@@ -31,6 +32,7 @@ export function AgentConsole() {
   const q = useDeepInit((s) => s.questionnaire);
   const channels = useDeepInit((s) => s.channels);
   const providers = useDeepInit((s) => s.providers);
+  const activeProviderId = useDeepInit((s) => s.activeProviderId);
   const tools = useDeepInit((s) => s.tools);
   const instances = useDeepInit((s) => s.instances);
   const tunnels = useDeepInit((s) => s.tunnels);
@@ -76,11 +78,16 @@ export function AgentConsole() {
 
   const enabledProviders = useMemo(
     () =>
-      [...providers]
-        .filter((p) => p.enabled && p.baseUrl && p.model)
-        .sort((a, b) => a.priority - b.priority)
-        .map((p) => ({ id: p.id, label: p.label, baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model, compat: p.compat })),
-    [providers]
+      // Active-brain chooser: the picked brain answers first, the rest keep
+      // priority order as fallback (same semantics as the Telegram gateway).
+      orderProviders(
+        [...providers]
+          .filter((p) => p.enabled && p.baseUrl && p.model)
+          .sort((a, b) => a.priority - b.priority)
+          .map((p) => ({ id: p.id, label: p.label, baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model, compat: p.compat })),
+        activeProviderId
+      ),
+    [providers, activeProviderId]
   );
 
   useEffect(() => {
