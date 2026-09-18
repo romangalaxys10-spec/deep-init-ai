@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runAgentChain, runAgentChainStreaming } from "@/lib/brain";
 import type { ChatRequest } from "@/lib/types";
+import { appendDirective, languageDirective, parseLangTag } from "@/lib/lang-detect";
 
 export const maxDuration = 60;
 
@@ -15,6 +16,17 @@ export async function POST(req: NextRequest) {
   const messages = Array.isArray(body.messages) ? body.messages.slice(-40) : [];
   if (!messages.length) {
     return NextResponse.json({ error: "messages[] is required" }, { status: 400 });
+  }
+
+  /* Language Mirror — the console tags mic-originated messages with the
+   * transcript's language. Pin the reply language for THIS turn by appending
+   * the directive to the system prompt (same helper as the Telegram gateway). */
+  if (parseLangTag(body.voiceLang)) {
+    if (messages[0]?.role === "system") {
+      messages[0] = { ...messages[0], content: appendDirective(messages[0].content, body.voiceLang, true) };
+    } else {
+      messages.unshift({ role: "system", content: languageDirective(parseLangTag(body.voiceLang)!) });
+    }
   }
 
   const providers = Array.isArray(body.providers) ? body.providers : [];

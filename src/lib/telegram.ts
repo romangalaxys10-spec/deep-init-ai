@@ -17,7 +17,8 @@ import {
 } from "./agent-registry";
 import { runAgentChainStreaming } from "./brain";
 import { brainSignature } from "./brains";
-import { transcribeAudio } from "./asr";
+import { transcribeAudio, type AsrResult } from "./asr";
+import { appendDirective } from "./lang-detect";
 import { extractVoiceBlocks, mdToSpeechText, synthesizeVoice, type SynthResult, type VoiceOutMode } from "./voice-out";
 import { personaByVoice, personaLabel, VOICE_PERSONAS } from "./voice-personas";
 import { consumeVoiceDelivered } from "./voice-ledger";
@@ -416,8 +417,45 @@ async function sendVoicePicker(
   }
 }
 
-/* ---------------- active-brain picker (provider / model chooser) ---------------- */
+/* ---------------- Language Mirror picker (/lang) ---------------- */
 
+const LANG_MIRROR_TEXT = (on: boolean) =>
+  [
+    "🌐 Language mirror — reply in the language you SPEAK",
+    `Current: ${on ? "ON — I answer in the language of your voice note (text + voice)" : "OFF — I answer in my default language"}`,
+    "",
+    "ON also makes my listening multi-language: each voice note is tried against several locales until one understands you.",
+    "The web console's voice popover has the same toggle — the last change wins.",
+  ].join("\n");
+
+function langPickerMarkup(on: boolean) {
+  return {
+    inline_keyboard: [
+      [
+        { text: on ? "🌐 On ✅" : "🌐 On", callback_data: "lm:on" },
+        { text: on ? "💬 Off" : "💬 Off ✅", callback_data: "lm:off" },
+      ],
+    ],
+  };
+}
+
+/** Send (or re-render) the Language Mirror picker. */
+async function sendLangPicker(token: string, chatId: number, on: boolean, editMessageId?: number): Promise<void> {
+  const body = {
+    chat_id: chatId,
+    text: LANG_MIRROR_TEXT(on),
+    reply_markup: langPickerMarkup(on),
+    disable_web_page_preview: true,
+  };
+  const r = editMessageId
+    ? await tgCall(token, "editMessageText", { ...body, message_id: editMessageId })
+    : await tgCall(token, "sendMessage", body);
+  if (!r.ok && editMessageId) {
+    await tgCall(token, "sendMessage", body);
+  }
+}
+
+/* ---------------- active-brain picker (provider / model chooser) ---------------- */
 /** Short per-provider button label, e.g. "🧠 My GPT · gpt-4o-mini". */
 function brainButtonLabel(p: RegisteredAgent["providers"][number], active: boolean): string {
   const base = `🧠 ${providerDisplayName(p)}`.slice(0, 60);
@@ -786,16 +824,21 @@ function contextLine(agent: RegisteredAgent, mode: string, userName: string): st
 interface Intake {
   text: string;
   note?: string;
+  /** Language Mirror — the language the user SPOKE ("ru", "he", "es"…). */
+  lang?: string;
 }
 
 /**
- * Transcribe an incoming Telegram voice/audio note.
+ * Transcribe an incoming Telegram voice/audio note — in ANY language.
  * Keyless cloud ASR (ogg/opus → WAV → Google Web Speech) with the
- * z-ai SDK tier as fallback — works on every deployment.
+ * z-ai SDK tier as fallback. When the Language Mirror is on, the
+ * recognizer runs a bounded multi-locale pass sequence and reports the
+ * language it heard, so the agent can answer in the SAME language.
  */
 async function transcribeTelegramVoice(
   botToken: string,
-  msg: TelegramMessage
+  msg: TelegramMessage,
+  opts?: { multiLang?: boolean }
 ): Promise<Intake | null> {
   const fileId = msg.voice?.file_id || msg.audio?.file_id;
   if (!fileId) return null;
@@ -804,9 +847,9 @@ async function transcribeTelegramVoice(
   const mime = msg.voice?.mime_type || msg.audio?.mime_type || "";
   const lang = msg.from?.language_code || "en";
   try {
-    const r = await transcribeAudio(bytes, mime, lang);
+    const r: AsrResult = await transcribeAudio(bytes, mime, lang, { multiLang: opts?.multiLang !== false });
     if (r.text) {
-      return { text: r.text, note: `[voice note from ${msg.from?.first_name || "user"}]` };
+      return { text: r.text, lang: r.lang, note: `[voice note from ${msg.from?.first_name || "user"}]` };
     }
     return {
       text: "",
@@ -919,6 +962,32 @@ async function handleCommand(
     );
     return { handled: "hint", replyPreview: "voice picker sent" };
   }
+  if (cmd === "/lang" || cmd === "/language") {
+    // Language Mirror toggle — owner-only (account-level setting, like /model)
+    if (chat.mode !== "owner") {
+      await replyAndRecord(
+        agent,
+        chat.chatId,
+        "Only the owner can change the language mirror — but speak to me in any language and I'll still understand. 🌐"
+      );
+      return { handled: "hint", replyPreview: "lang toggle denied (non-owner)" };
+    }
+    const arg = text.split(/\s+/)[1]?.toLowerCase();
+    if (arg === "on" || arg === "off") {
+      agent.langMirror = arg === "on";
+      touchAgent(agent);
+      await replyAndRecord(
+        agent,
+        chat.chatId,
+        agent.langMirror
+          ? "🌐 Language mirror ON — I answer in the language you speak (text + voice), and my listening tries several languages."
+          : "💬 Language mirror OFF — I answer in my default language. Voice notes still transcribe with your Telegram language."
+      );
+      return { handled: "hint", replyPreview: `langMirror → ${agent.langMirror}` };
+    }
+    await sendLangPicker(agent.botToken, chat.chatId, agent.langMirror !== false);
+    return { handled: "hint", replyPreview: "lang picker sent" };
+  }
   if (cmd === "/model" || cmd === "/models" || cmd === "/brains") {
     // active-brain picker — choose WHICH provider/model answers first
     // (owner-only: whitelist users must not retarget the owner's chain)
@@ -949,7 +1018,7 @@ async function handleCommand(
         `${agent.agentName} — your personal agent (Deep-init AI)`,
         "",
         "Just talk to me: ask questions, send tasks, paste text, forward links.",
-        "🎤 Voice notes → I transcribe and answer — and talk back (send /voice to switch modes).",
+        "🎤 Voice notes → I transcribe and answer — in the SAME language you speak (send /lang for the toggle), and talk back (send /voice to switch modes).",
         "📷 Photos → I analyze them.",
         "",
         "Tools I can run: live web search, page reading, image search & generation, voice notes (TTS), long-term memory, scheduled reminders. Long code arrives as files.",
@@ -958,6 +1027,7 @@ async function handleCommand(
         "/status — what I am and what's wired",
         "/model — pick which brain (provider/model) answers first",
         "/voice — voice settings: persona picker + reply mode (same voices as the web console)",
+        "/lang — language mirror: understand any language, answer in the same one (text + voice)",
         "/reset — clear this thread's memory",
         "/help — this list",
       ].join("\n"),
@@ -980,6 +1050,7 @@ async function handleCommand(
         `• Brains: ${prov}`,
         `• Active brain: ${active ? providerDisplayName(active) : "auto (priority order)"}`,
         `• Tools: web_search, web_fetch, image_search, image_gen, tts, remember/recall, remind`,
+        `• Language mirror: ${agent.langMirror !== false ? "on — answers in the language you speak" : "off"}`,
         `• Memory: ${(agent.memory ?? []).length} facts • Pending reminders: ${pending}`,
         `• Deliverables: formatted markdown, code files, images, voice notes`,
       ].join("\n"),
@@ -1017,6 +1088,7 @@ async function handleVoiceCallback(
   const vp = data.match(/^vp:(.+)$/);
   const vm = data.match(/^vm:(auto|on|off)$/);
   const mp = data.match(/^mp:(\d+|auto)$/);
+  const lm = data.match(/^lm:(on|off)$/);
 
   if (mp) {
     // Active-brain pick — owner-only (whitelist users must not retarget
@@ -1045,6 +1117,24 @@ async function handleVoiceCallback(
     await tgAnswerCallback(botToken, cb.id, `Active brain: ${providerDisplayName(p)}`);
     await sendModelPicker(agent, chatId, cb.message?.message_id);
     return { handled: "hint", replyPreview: `activeProvider → ${providerDisplayName(p)}` };
+  }
+
+  if (lm) {
+    // Language Mirror toggle — owner-only, account-level (synced with the
+    // web console's voice popover via the same registry field).
+    if (chat.mode !== "owner") {
+      await tgAnswerCallback(botToken, cb.id, "Only the owner can change the language mirror");
+      return { handled: "hint", replyPreview: "lang toggle denied (non-owner)" };
+    }
+    agent.langMirror = lm[1] === "on";
+    touchAgent(agent);
+    await tgAnswerCallback(
+      botToken,
+      cb.id,
+      agent.langMirror ? "Language mirror: ON — I answer in the language you speak" : "Language mirror: OFF"
+    );
+    await sendLangPicker(botToken, chatId, agent.langMirror, cb.message?.message_id);
+    return { handled: "hint", replyPreview: `langMirror → ${agent.langMirror}` };
   }
 
   if (vp) {
@@ -1098,9 +1188,18 @@ export async function handleTelegramUpdate(
   const chatId = msg.chat.id;
   let text = msg.text?.trim() || "";
 
+  /* Language Mirror state must be known BEFORE transcription: the multi-locale
+   * STT pass sequence is gated on the agent's toggle. The lookup is read-only,
+   * so resolving it early is safe. */
+  const earlyAgent = findBoundAgent(botToken, chatId);
+  const multiLang = earlyAgent ? earlyAgent.langMirror !== false : true;
+
+  /** Language the user SPOKE in this voice note (for the reply directive). */
+  let voiceLang: string | undefined;
+
   /* 0) media intake — voice/audio → ASR, photo → vision (Hermes/OpenClaw parity) */
   if (!text && (msg.voice || msg.audio)) {
-    const intake = await transcribeTelegramVoice(botToken, msg);
+    const intake = await transcribeTelegramVoice(botToken, msg, { multiLang });
     if (intake?.note && !intake.text) {
       const nudge = findBoundAgent(botToken, chatId);
       if (nudge) await replyAndRecord(nudge, chatId, intake.note);
@@ -1108,6 +1207,7 @@ export async function handleTelegramUpdate(
     }
     if (intake) {
       text = [intake.note, intake.text].filter(Boolean).join(" ");
+      voiceLang = intake.lang;
     }
   } else if (!text && msg.photo) {
     const intake = await describeTelegramPhoto(botToken, msg);
@@ -1191,7 +1291,13 @@ export async function handleTelegramUpdate(
     const messages = [
       {
         role: "system" as const,
-        content: agent.systemPrompt + contextLine(agent, boundChat.mode, boundChat.userName),
+        content: appendDirective(
+          agent.systemPrompt + contextLine(agent, boundChat.mode, boundChat.userName),
+          // Language Mirror — the user just SPOKE a language; pin the reply
+          // language deterministically (text + voice) for THIS turn only.
+          voiceLang,
+          agent.langMirror !== false
+        ),
       },
       ...thread,
     ];

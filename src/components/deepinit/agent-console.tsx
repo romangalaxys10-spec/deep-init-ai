@@ -52,7 +52,7 @@ export function AgentConsole() {
   /* voice mode — hands-free conversation loop (see useVoiceMode) */
   const voiceModeRef = useRef<ReturnType<typeof useVoiceMode> | null>(null);
   const voiceMode = useVoiceMode({
-    onSend: (text) => send(text),
+    onSend: (text, lang) => send(text, lang),
     lang: uiLang === "ru" ? "ru-RU" : uiLang === "he" ? "he-IL" : "en-US",
   });
   useEffect(() => {
@@ -116,12 +116,21 @@ export function AgentConsole() {
     }
   }, [visible, voice.enabled, voice.autoSpeak, sending, speak]);
 
-  const send = async (text?: string) => {
+  /* Language Mirror — the detected language of the last mic transcript,
+   * consumed by the NEXT send (the directive applies to that turn only). */
+  const micLangRef = useRef<string | undefined>(undefined);
+
+  const send = async (text?: string, voiceLang?: string) => {
     const content = (text ?? input).trim();
     if (!content || sending) return;
 
     // voice session: pause the mic while this message is in flight
     voiceModeRef.current?.hold();
+
+    // the voice mode loop hands us its transcript language directly;
+    // dictation (mic button) stashes it in micLangRef
+    const lang = voiceLang ?? micLangRef.current;
+    micLangRef.current = undefined;
 
     setInput("");
     setSending(true);
@@ -153,6 +162,7 @@ export function AgentConsole() {
           providers: enabledProviders,
           allowDemoBrain: true,
           stream: true,
+          voiceLang: lang,
         }),
       });
 
@@ -350,7 +360,14 @@ export function AgentConsole() {
             className="min-h-[52px] flex-1 resize-none border-0 bg-transparent text-sm shadow-none focus-visible:ring-0"
             rows={2}
           />
-          {voiceMode.state === "off" && <MicButton onText={(t) => setInput((cur) => (cur ? `${cur} ${t}` : t))} />}
+          {voiceMode.state === "off" && (
+            <MicButton
+              onText={(t, lang) => {
+                setInput((cur) => (cur ? `${cur} ${t}` : t));
+                micLangRef.current = lang;
+              }}
+            />
+          )}
           <Button onClick={() => send()} disabled={sending || !input.trim()} size="icon" className="mb-1 h-9 w-9 shrink-0" aria-label="Send">
             <Send className="h-4 w-4" />
           </Button>

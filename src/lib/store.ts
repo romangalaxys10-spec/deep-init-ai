@@ -228,6 +228,7 @@ function scheduleVoiceGatewaySync(): void {
           voiceId: s.voice.voice,
           voiceRate: s.voice.rate,
           voicePitch: s.voice.pitch,
+          langMirror: s.voice.langMirror,
         }),
       });
     } catch {
@@ -252,6 +253,7 @@ const defaultVoice: VoiceSettings = {
   voice: "en-US-AvaNeural",
   rate: 0,
   pitch: 0,
+  langMirror: true, // Language Mirror ships ON — toggle in the voice popover
 };
 
 export const useDeepInit = create<DeepInitState>()(
@@ -364,8 +366,15 @@ export const useDeepInit = create<DeepInitState>()(
         set((s) => ({ voice: { ...s.voice, ...v } }));
         // Voice Persona Passport — push the sound of the agent to the
         // Telegram gateway (best-effort, same pattern as preset/brain sync).
-        // Rate/pitch sliders fire rapidly → debounced.
-        if (v.voice !== undefined || v.rate !== undefined || v.pitch !== undefined) {
+        // Rate/pitch sliders fire rapidly → debounced. The Language Mirror
+        // toggle rides the same sync (it gates the gateway's multi-locale
+        // STT + reply-language directive).
+        if (
+          v.voice !== undefined ||
+          v.rate !== undefined ||
+          v.pitch !== undefined ||
+          v.langMirror !== undefined
+        ) {
           scheduleVoiceGatewaySync();
         }
       },
@@ -533,6 +542,17 @@ export const useDeepInit = create<DeepInitState>()(
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();
+      },
+      // deep-merge the nested `voice` settings: older persisted states lack
+      // `langMirror` and a shallow merge would silently turn the Language
+      // Mirror OFF for existing users instead of falling back to the default
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<DeepInitState>;
+        return {
+          ...current,
+          ...p,
+          voice: { ...current.voice, ...(p.voice ?? {}) },
+        };
       },
     }
   )

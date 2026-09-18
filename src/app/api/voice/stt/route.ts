@@ -20,6 +20,7 @@ export async function POST(req: NextRequest) {
   let bytes: Buffer | null = null;
   let mime = "";
   let lang = "en-US";
+  let multiLang = true; // Language Mirror defaults ON
 
   const ctype = req.headers.get("content-type") || "";
   try {
@@ -32,8 +33,10 @@ export async function POST(req: NextRequest) {
       }
       const l = form.get("lang");
       if (typeof l === "string" && l.trim()) lang = l;
+      const m = form.get("multiLang");
+      if (typeof m === "string") multiLang = m !== "false";
     } else {
-      const body = (await req.json()) as { audio?: string; mime?: string; lang?: string };
+      const body = (await req.json()) as { audio?: string; mime?: string; lang?: string; multiLang?: boolean };
       if (body.audio) {
         const clean = body.audio.includes(",") && body.audio.startsWith("data:")
           ? body.audio.slice(body.audio.indexOf(",") + 1)
@@ -42,6 +45,7 @@ export async function POST(req: NextRequest) {
         mime = body.mime || "audio/wav";
       }
       if (body.lang?.trim()) lang = body.lang;
+      if (typeof body.multiLang === "boolean") multiLang = body.multiLang;
     }
   } catch {
     return NextResponse.json({ error: "invalid request body" }, { status: 400 });
@@ -52,9 +56,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const r = await transcribeAudio(bytes, mime, lang);
+    const r = await transcribeAudio(bytes, mime, lang, { multiLang });
     if (r.text) {
-      return NextResponse.json({ text: r.text, via: r.via });
+      return NextResponse.json({ text: r.text, via: r.via, lang: r.lang ?? null, confidence: r.confidence ?? null });
     }
     return NextResponse.json(
       { error: r.error || "no speech recognized" },

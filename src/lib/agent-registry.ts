@@ -84,6 +84,9 @@ export interface RegisteredAgent {
   voiceRate?: number;
   /** pitch tweak from the web picker, -50..50 (Hz) */
   voicePitch?: number;
+  /** Language Mirror — reply in the language the user SPOKE (text + voice).
+   *  undefined → ON (the feature ships enabled; false = explicitly turned off). */
+  langMirror?: boolean;
 }
 
 export interface Reminder {
@@ -352,6 +355,8 @@ export interface RegisterInput {
   voiceId?: string;
   voiceRate?: number;
   voicePitch?: number;
+  /** Language Mirror preference carried at (re-)pairing; preserved when omitted. */
+  langMirror?: boolean;
 }
 
 export function registerAgent(input: RegisterInput): RegisteredAgent {
@@ -375,6 +380,7 @@ export function registerAgent(input: RegisterInput): RegisteredAgent {
     voiceId: input.voiceId !== undefined ? input.voiceId : prev?.voiceId,
     voiceRate: input.voiceRate !== undefined ? input.voiceRate : prev?.voiceRate,
     voicePitch: input.voicePitch !== undefined ? input.voicePitch : prev?.voicePitch,
+    langMirror: input.langMirror !== undefined ? input.langMirror : prev?.langMirror,
   };
   mem.set(input.key, agent);
   return agent;

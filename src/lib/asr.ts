@@ -18,6 +18,7 @@
  * ============================================================ */
 
 import { getZAI } from "./zai";
+import { detectLang } from "./lang-detect";
 
 /* Chromium's public speech key — the same one embedded in every
  * Chrome install for Web Speech. Keyless from our side. */
@@ -29,6 +30,10 @@ export interface AsrResult {
   text: string;
   via: string;
   error?: string;
+  /** language of the transcript (2-letter code) — best-effort */
+  lang?: string;
+  /** recognizer confidence 0..1 when the engine reports it */
+  confidence?: number;
 }
 
 /** Normalize loose language hints ("ru", "he-IL", "en_US") to STT locales. */
@@ -174,8 +179,8 @@ export async function oggOpusDecode(bytes: Uint8Array): Promise<Float32Array | n
   }
 }
 
-/** Google Web Speech v2 — returns the best transcript or "" (none recognized). */
-async function googleStt(wav: Buffer, lang: string): Promise<string> {
+/** Google Web Speech v2 — returns the best transcript + confidence ("" = none). */
+async function googleStt(wav: Buffer, lang: string): Promise<{ text: string; confidence: number }> {
   const url = `${GOOGLE_STT_URL}?output=json&lang=${encodeURIComponent(lang)}&key=${GOOGLE_STT_KEY}&pfilter=2&maxresults=1`;
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), GOOGLE_STT_TIMEOUT_MS);
@@ -197,12 +202,14 @@ async function googleStt(wav: Buffer, lang: string): Promise<string> {
           result?: { alternative?: { transcript?: string; confidence?: number }[] }[];
         };
         const alt = j.result?.[0]?.alternative?.[0];
-        if (alt?.transcript) return cleanTranscript(alt.transcript);
+        if (alt?.transcript) {
+          return { text: cleanTranscript(alt.transcript), confidence: Number(alt.confidence) || 0 };
+        }
       } catch {
         /* not JSON — skip line (endpoint emits one JSON per line) */
       }
     }
-    return "";
+    return { text: "", confidence: 0 };
   } finally {
     clearTimeout(t);
   }
@@ -236,16 +243,86 @@ function cleanTranscript(text: string): string {
 export const ASR_VIA_GOOGLE = "voice transcriber (google stt)";
 export const ASR_VIA_ZAI = "voice transcriber (z-ai asr)";
 
+/* ---------------- Language Mirror: multi-locale STT ---------------- */
+
 /**
- * Transcribe raw audio bytes in any common container.
- * Returns { text } on success, { text: "", error } otherwise.
+ * Priority queue of STT locales. The app's own languages first (en/ru/he
+ * are the UI languages and the most common voice notes), then high-value
+ * worldwide locales. Pure data — tests assert the exact order.
+ */
+export const STT_LOCALE_QUEUE = [
+  "en-US", "ru-RU", "he-IL",
+  "es-ES", "fr-FR", "de-DE", "pt-BR", "it-IT", "tr-TR",
+  "ar-SA", "uk-UA", "ka-GE", "pl-PL", "nl-NL",
+  "zh-CN", "ja-JP", "ko-KR", "hi-IN",
+] as const;
+
+/** Hard cap on recognizer passes per clip (latency guard). */
+export const STT_MAX_PASSES = 4;
+
+/** Confidence at which a pass wins immediately — no further passes run. */
+export const STT_GOOD_CONFIDENCE = 0.75;
+
+export interface SttPass {
+  locale: string;
+  text: string;
+  confidence: number;
+}
+
+/**
+ * Which locales to try, in order. Pure.
+ *  • multiLang OFF → exactly one pass: the caller's hint (today's behavior)
+ *  • multiLang ON  → the hint first (caller/browser/Telegram locale is a
+ *    real signal), then the priority queue (deduped), capped at STT_MAX_PASSES
+ */
+export function nextLocales(hint: string, multiLang: boolean): string[] {
+  const first = normLang(hint);
+  if (!multiLang) return [first];
+  const out = [first];
+  for (const l of STT_LOCALE_QUEUE) {
+    if (out.length >= STT_MAX_PASSES) break;
+    if (!out.includes(l)) out.push(l);
+  }
+  return out;
+}
+
+/**
+ * Pick the winning pass. Pure + deterministic:
+ *  • only passes that actually produced text compete
+ *  • a pass at/above STT_GOOD_CONFIDENCE wins instantly (earliest such pass)
+ *  • otherwise the highest confidence wins; exact ties → the EARLIER pass
+ *    (the caller's hint is the stronger prior)
+ * Returns null when every pass came back empty.
+ */
+export function pickBestPass(passes: SttPass[]): SttPass | null {
+  const withText = passes.filter((p) => p.text);
+  if (!withText.length) return null;
+  const good = withText.find((p) => p.confidence >= STT_GOOD_CONFIDENCE);
+  if (good) return good;
+  let best = withText[0];
+  for (const p of withText.slice(1)) {
+    if (p.confidence > best.confidence) best = p;
+  }
+  return best;
+}
+
+/**
+ * Transcribe raw audio bytes in any common container — in ANY language.
+ *
+ * With multiLang (Language Mirror ON) the recognizer runs a bounded
+ * sequence of locale passes: the caller's hint first, then the priority
+ * queue, stopping early on a confident pass and otherwise keeping the
+ * most confident transcript. The result carries the detected language
+ * so the reply can be mirrored (text directive + native TTS voice).
  */
 export async function transcribeAudio(
   bytes: Buffer,
   mimeHint = "",
-  langHint = "en"
+  langHint = "en",
+  opts?: { multiLang?: boolean }
 ): Promise<AsrResult> {
-  const lang = normLang(langHint);
+  const multiLang = opts?.multiLang !== false; // Language Mirror defaults ON
+  const locales = nextLocales(langHint, multiLang);
   if (!bytes?.length) return { text: "", via: "", error: "empty audio" };
   if (bytes.length > 9 * 1024 * 1024) {
     return { text: "", via: "", error: "audio too long — keep voice notes under a few minutes" };
@@ -255,35 +332,53 @@ export async function transcribeAudio(
   const isOgg = head4 === "OggS" || /ogg/i.test(mimeHint);
   const isWav = head4 === "RIFF" && bytes.toString("ascii", 8, 12) === "WAVE";
 
+  /** Google passes over the decoded PCM, locale by locale. */
+  const runGooglePasses = async (pcm: Float32Array, srcRate: number): Promise<AsrResult | null> => {
+    const wav = encodeWavPcm16(resample(pcm, srcRate), 16000);
+    const passes: SttPass[] = [];
+    for (const locale of locales) {
+      const { text, confidence } = await googleStt(wav, locale);
+      const pass = { locale, text, confidence };
+      if (pass.text) passes.push(pass);
+      if (pass.text && pass.confidence >= STT_GOOD_CONFIDENCE) break; // confident — stop early
+    }
+    const best = pickBestPass(passes);
+    if (!best) return null;
+    return {
+      text: best.text,
+      via: ASR_VIA_GOOGLE,
+      lang: detectLang(best.text),
+      confidence: best.confidence,
+    };
+  };
+
   if (isOgg) {
     const pcm = await oggOpusDecode(bytes);
     if (pcm && pcm.length) {
-      const wav = encodeWavPcm16(resample(pcm, 48000), 16000);
-      const text = await googleStt(wav, lang);
-      if (text) return { text, via: ASR_VIA_GOOGLE };
+      const r = await runGooglePasses(pcm, 48000);
+      if (r) return r;
     }
     const viaZai = await zaiAsr(bytes.toString("base64"));
-    if (viaZai) return { text: viaZai, via: ASR_VIA_ZAI };
+    if (viaZai) return { text: viaZai, via: ASR_VIA_ZAI, lang: detectLang(viaZai) };
     return { text: "", via: "", error: pcm ? "no speech recognized" : "could not decode audio" };
   }
 
   if (isWav) {
     const dec = decodeWav(bytes);
     if (dec && dec.samples.length) {
-      const wav = encodeWavPcm16(resample(dec.samples, dec.rate), 16000);
-      const text = await googleStt(wav, lang);
-      if (text) return { text, via: ASR_VIA_GOOGLE };
+      const r = await runGooglePasses(dec.samples, dec.rate);
+      if (r) return r;
       const viaZai = await zaiAsr(bytes.toString("base64"));
-      if (viaZai) return { text: viaZai, via: ASR_VIA_ZAI };
+      if (viaZai) return { text: viaZai, via: ASR_VIA_ZAI, lang: detectLang(viaZai) };
       return { text: "", via: "", error: "no speech recognized" };
     }
     const viaZai = await zaiAsr(bytes.toString("base64"));
-    if (viaZai) return { text: viaZai, via: ASR_VIA_ZAI };
+    if (viaZai) return { text: viaZai, via: ASR_VIA_ZAI, lang: detectLang(viaZai) };
     return { text: "", via: "", error: "could not decode audio" };
   }
 
   /* MP3 / M4A / WebM etc — SDK ASR where reachable (audio notes). */
   const viaZai = await zaiAsr(bytes.toString("base64"));
-  if (viaZai) return { text: viaZai, via: ASR_VIA_ZAI };
+  if (viaZai) return { text: viaZai, via: ASR_VIA_ZAI, lang: detectLang(viaZai) };
   return { text: "", via: "", error: "unsupported audio format — send a voice note (ogg/opus) or wav" };
 }

@@ -15,6 +15,8 @@
  * Russian doesn't get mangled by an English-only neural voice.
  * ============================================================ */
 
+import { detectLang } from "./lang-detect";
+
 export interface VoicePersona {
   /** stable id used in pickers, callbacks and the registry */
   voice: string;
@@ -55,22 +57,45 @@ export function personaLabel(voiceId: string | null | undefined): string {
 
 /* ---------------- locale adaptation ---------------- */
 
-/** Fallback voice per gender when the persona's own locale can't speak
- *  the detected language (all verified live against the Edge TTS service). */
+/** Native Edge voice per language, split by persona gender — the persona's
+ *  character (gender/energy) is preserved while the locale follows the
+ *  language actually being spoken. All voices are standard Azure/Edge
+ *  Neural voices (the same family the English personas come from). */
 const LOCALE_VOICES: Record<string, { f: string; m: string }> = {
   en: { f: "en-US-AvaNeural", m: "en-US-GuyNeural" },
   ru: { f: "ru-RU-SvetlanaNeural", m: "ru-RU-DmitryNeural" },
   he: { f: "he-IL-HilaNeural", m: "he-IL-AvriNeural" },
+  uk: { f: "uk-UA-PolinaNeural", m: "uk-UA-OstapNeural" },
+  es: { f: "es-ES-ElviraNeural", m: "es-ES-AlvaroNeural" },
+  pt: { f: "pt-BR-FranciscaNeural", m: "pt-BR-AntonioNeural" },
+  fr: { f: "fr-FR-DeniseNeural", m: "fr-FR-HenriNeural" },
+  de: { f: "de-DE-KatjaNeural", m: "de-DE-ConradNeural" },
+  it: { f: "it-IT-ElsaNeural", m: "it-IT-DiegoNeural" },
+  tr: { f: "tr-TR-EmelNeural", m: "tr-TR-AhmetNeural" },
+  ar: { f: "ar-SA-ZariyahNeural", m: "ar-SA-HamedNeural" },
+  fa: { f: "fa-IR-DilaraNeural", m: "fa-IR-FaridNeural" },
+  ka: { f: "ka-GE-EkaNeural", m: "ka-GE-GiorgiNeural" },
+  pl: { f: "pl-PL-ZofiaNeural", m: "pl-PL-MarekNeural" },
+  nl: { f: "nl-NL-ColetteNeural", m: "nl-NL-MaartenNeural" },
+  zh: { f: "zh-CN-XiaoxiaoNeural", m: "zh-CN-YunxiNeural" },
+  ja: { f: "ja-JP-NanamiNeural", m: "ja-JP-KeitaNeural" },
+  ko: { f: "ko-KR-SunHiNeural", m: "ko-KR-InJoonNeural" },
+  hi: { f: "hi-IN-SwaraNeural", m: "hi-IN-MadhurNeural" },
+  th: { f: "th-TH-PremwadeeNeural", m: "th-TH-NiwatNeural" },
+  vi: { f: "vi-VN-HoaiMyNeural", m: "vi-VN-NamMinhNeural" },
+  // id-ID-ArifNeural (the only id-ID male) currently fails synthesis on the
+  // Edge tier ("no turn.end", verified against a GadisNeural control) — the
+  // female voice beats an English fallback mangling Indonesian.
+  id: { f: "id-ID-GadisNeural", m: "id-ID-GadisNeural" },
 };
 
-const CYRILLIC_RE = /[\u0400-\u04FF]/;
-const HEBREW_RE = /[\u0590-\u05FF]/;
-
-/** Script detection on the text that is about to be spoken. */
-export function detectSpeechLang(text: string): "ru" | "he" | "en" {
-  if (CYRILLIC_RE.test(text)) return "ru";
-  if (HEBREW_RE.test(text)) return "he";
-  return "en";
+/**
+ * Script/stop-word detection on the text that is about to be spoken.
+ * Delegates to the shared Language Mirror detector so the voice always
+ * matches the language the user actually heard / asked in.
+ */
+export function detectSpeechLang(text: string): string {
+  return detectLang(text);
 }
 
 /**

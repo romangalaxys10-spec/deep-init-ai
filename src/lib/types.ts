@@ -148,6 +148,10 @@ export interface VoiceSettings {
   voice: string;
   rate: number; // -50..50
   pitch: number; // -50..50
+  /** Language Mirror — understand any spoken language and reply in the
+   *  SAME language (text + voice). true → multi-locale STT + reply-language
+   *  directive + native-voice matching; false → single-locale, as before. */
+  langMirror: boolean;
 }
 
 /* ---------- Skills ---------- */
@@ -199,6 +203,10 @@ export interface ChatRequest {
   allowDemoBrain?: boolean;
   /** enabled cognition packs (Hermes / Moltis brains) */
   brains?: { hermes?: boolean; moltis?: boolean };
+  /** Language Mirror — when this message originated from the microphone,
+   *  the detected language of the transcript ("ru", "he", "es"…). The
+   *  server pins the reply language with a directive. */
+  voiceLang?: string;
 }
 
 export interface ChatResponse {

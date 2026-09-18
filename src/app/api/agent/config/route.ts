@@ -37,6 +37,7 @@ function sanitizeProviders(raw: unknown): RegisteredAgent["providers"] | null {
  * Body: { ownerToken, presetId?: string | null, systemPrompt?: string,
  *         brains?: { hermes?: boolean, moltis?: boolean } | null,
  *         voiceId?: string | null, voiceRate?: number, voicePitch?: number,
+ *         langMirror?: boolean,
  *         providers?: AIProvider[], activeProvider?: string | null }
  */
 export async function POST(req: NextRequest) {
@@ -48,6 +49,7 @@ export async function POST(req: NextRequest) {
     voiceId?: string | null;
     voiceRate?: number;
     voicePitch?: number;
+    langMirror?: boolean;
     providers?: unknown;
     activeProvider?: string | null;
   };
@@ -105,6 +107,13 @@ export async function POST(req: NextRequest) {
     agent.voicePitch = Math.max(-50, Math.min(50, Math.round(body.voicePitch)));
   }
 
+  /* Language Mirror — reply in the language the user SPOKE (voice notes on
+     Telegram + dictation in the console). A strict boolean; nothing else
+     ever flips it (provider/voice pushes never clobber the toggle). */
+  if (typeof body.langMirror === "boolean") {
+    agent.langMirror = body.langMirror;
+  }
+
   /* Provider Passport — provider changes made in the portal (add / edit /
      remove / reorder) reach the Telegram gateway WITHOUT re-pairing.
      Before this, the gateway kept the pairing-time snapshot forever, so a
@@ -142,6 +151,7 @@ export async function POST(req: NextRequest) {
     voiceId: agent.voiceId ?? null,
     voiceRate: agent.voiceRate ?? 0,
     voicePitch: agent.voicePitch ?? 0,
+    langMirror: agent.langMirror !== false,
     providers: agent.providers,
     activeProvider: agent.activeProvider ?? null,
   });

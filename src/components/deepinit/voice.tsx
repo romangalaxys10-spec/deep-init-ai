@@ -32,6 +32,8 @@ const VAD_MAX_MS = 15000; // hard cap per utterance
 interface VoiceCaptureResult {
   text?: string;
   error?: string;
+  /** Language Mirror — server-detected language of the transcript */
+  lang?: string;
 }
 
 interface VoiceCapture {
@@ -90,15 +92,15 @@ function bufToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-async function postStt(wav: Uint8Array, lang: string): Promise<VoiceCaptureResult> {
+async function postStt(wav: Uint8Array, lang: string, multiLang = true): Promise<VoiceCaptureResult> {
   try {
     const res = await fetch("/api/voice/stt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ audio: bufToBase64(wav), mime: "audio/wav", lang }),
+      body: JSON.stringify({ audio: bufToBase64(wav), mime: "audio/wav", lang, multiLang }),
     });
-    const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
-    if (res.ok && data.text) return { text: String(data.text) };
+    const data = (await res.json().catch(() => ({}))) as { text?: string; lang?: string; error?: string };
+    if (res.ok && data.text) return { text: String(data.text), lang: data.lang ?? undefined };
     return { error: String(data.error || "stt-fail") };
   } catch {
     return { error: "stt-network" };
@@ -110,6 +112,8 @@ async function postStt(wav: Uint8Array, lang: string): Promise<VoiceCaptureResul
  * utterance ends (trailing silence) or the hard cap is reached. */
 async function openVoiceCapture(opts: {
   lang: string;
+  /** Language Mirror — server tries several locales until one understands */
+  multiLang?: boolean;
   onAutoCommit?: (c: VoiceCapture) => void;
 }): Promise<VoiceCapture | null> {
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return null;
@@ -204,7 +208,7 @@ async function openVoiceCapture(opts: {
         off += c.length;
       }
       const samples = resampleLocal(merged, ctx.sampleRate, 16000);
-      return postStt(encodeWavLocal(samples, 16000), opts.lang);
+      return postStt(encodeWavLocal(samples, 16000), opts.lang, opts.multiLang !== false);
     },
   };
   return capture;
@@ -282,12 +286,22 @@ export function useSpeak() {
 }
 
 /** Web Speech API mic → text; falls back to PCM capture + server STT
- * when the browser doesn't ship SpeechRecognition. */
-export function useDictation(onText: (t: string) => void) {
+ * when the browser doesn't ship SpeechRecognition.
+ *
+ * Language Mirror: when ON, the browser's locale-locked SpeechRecognition
+ * is BYPASSED — every utterance goes through the server capture path,
+ * which tries several locales until one understands the language you
+ * actually spoke. onText receives the server-detected language. */
+export function useDictation(onText: (t: string, lang?: string) => void) {
   const [listening, setListening] = useState(false);
   const [busy, setBusy] = useState(false);
   const recRef = useRef<unknown>(null);
   const capRef = useRef<VoiceCapture | null>(null);
+  const langMirror = useDeepInit((s) => s.voice.langMirror);
+  const mirrorRef = useRef(langMirror);
+  useEffect(() => {
+    mirrorRef.current = langMirror;
+  }, [langMirror]);
 
   // computed at render — this component only mounts on the client
   const w = typeof window !== "undefined" ? (window as unknown as Record<string, unknown>) : {};
@@ -302,7 +316,7 @@ export function useDictation(onText: (t: string) => void) {
       setBusy(true);
       const r = await cap.stop(true);
       setBusy(false);
-      if (r.text?.trim()) onText(r.text.trim());
+      if (r.text?.trim()) onText(r.text.trim(), r.lang);
     },
     [onText]
   );
@@ -320,7 +334,9 @@ export function useDictation(onText: (t: string) => void) {
       else setListening(false);
       return;
     }
-    if (srSupported) {
+    if (srSupported && !mirrorRef.current) {
+      // Browser SpeechRecognition only when the Language Mirror is OFF —
+      // it is locked to the browser's locale and would mangle other languages.
       const SR = (w.SpeechRecognition || w.webkitSpeechRecognition) as
         | (new () => {
             continuous: boolean;
@@ -354,10 +370,12 @@ export function useDictation(onText: (t: string) => void) {
       return;
     }
     // compatibility path — PCM capture, transcribed server-side
+    // (multi-locale when the Language Mirror is on)
     setListening(true);
     void (async () => {
       const cap = await openVoiceCapture({
         lang: typeof navigator !== "undefined" ? navigator.language || "en-US" : "en-US",
+        multiLang: mirrorRef.current,
         onAutoCommit: (c) => void finishCapture(c),
       });
       if (!cap) {
@@ -375,6 +393,7 @@ export function VoiceControls({ speak }: { speak: (t: string, id?: string) => Pr
   const voice = useDeepInit((s) => s.voice);
   const setVoice = useDeepInit((s) => s.setVoice);
   const agentName = useDeepInit((s) => s.profile.agentName);
+  const t = useT();
   const [testing, setTesting] = useState(false);
 
   const test = async () => {
@@ -436,6 +455,19 @@ export function VoiceControls({ speak }: { speak: (t: string, id?: string) => Pr
             <Switch checked={voice.autoSpeak} onCheckedChange={(v) => setVoice({ autoSpeak: v })} aria-label="Auto speak" />
           </div>
 
+          {/* Language Mirror — speak any language, get answered in the same one */}
+          <div className="rounded-lg border border-border/70 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-xs">{t("vm.langMirrorTitle")}</Label>
+              <Switch
+                checked={voice.langMirror}
+                onCheckedChange={(v) => setVoice({ langMirror: v })}
+                aria-label={t("vm.langMirrorTitle")}
+              />
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{t("vm.langMirrorDesc")}</p>
+          </div>
+
           <Button variant="outline" className="w-full font-mono text-xs" onClick={test} disabled={testing || !voice.enabled}>
             {testing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Volume2 className="mr-2 h-3.5 w-3.5" />}
             Hear {agentName || "the agent"}
@@ -446,7 +478,7 @@ export function VoiceControls({ speak }: { speak: (t: string, id?: string) => Pr
   );
 }
 
-export function MicButton({ onText }: { onText: (t: string) => void }) {
+export function MicButton({ onText }: { onText: (t: string, lang?: string) => void }) {
   const { listening, supported, toggle } = useDictation(onText);
   if (!supported) return null;
   return (
@@ -490,11 +522,16 @@ interface SpeechRecognitionLike {
   abort: () => void;
 }
 
-export function useVoiceMode(opts: { onSend: (text: string) => void; lang?: string }) {
+export function useVoiceMode(opts: { onSend: (text: string, lang?: string) => void; lang?: string }) {
   const [state, setState] = useState<VoiceModeState>("off");
   const [interim, setInterim] = useState("");
   const [lastError, setLastError] = useState<string | null>(null);
   const [compat, setCompat] = useState(false); // PCM capture + server STT engine
+  const langMirror = useDeepInit((s) => s.voice.langMirror);
+  const mirrorRef = useRef(langMirror);
+  useEffect(() => {
+    mirrorRef.current = langMirror;
+  }, [langMirror]);
   const [supported] = useState(() => {
     if (typeof window === "undefined") return false;
     const w = window as unknown as Record<string, unknown>;
@@ -548,7 +585,7 @@ export function useVoiceMode(opts: { onSend: (text: string) => void; lang?: stri
     if (stateRef.current === "off") return; // session ended while transcribing
     if (r.text && r.text.trim().length >= 2) {
       setLastError(null);
-      sendRef.current(r.text.trim());
+      sendRef.current(r.text.trim(), r.lang);
     } else {
       setLastError(r.error && r.error !== "no speech recognized" ? r.error : "stt-empty");
       // didn't catch it — reopen the mic so the session keeps flowing
@@ -561,6 +598,7 @@ export function useVoiceMode(opts: { onSend: (text: string) => void; lang?: stri
     if (stateRef.current === "off") return;
     const cap = await openVoiceCapture({
       lang: langRef.current,
+      multiLang: mirrorRef.current,
       onAutoCommit: (c) => {
         if (capRef.current === c) pcmCommitRef.current();
       },
@@ -691,11 +729,13 @@ export function useVoiceMode(opts: { onSend: (text: string) => void; lang?: stri
     setInterim("");
     go("listening");
     const w = window as unknown as Record<string, unknown>;
-    if (w.SpeechRecognition || w.webkitSpeechRecognition) {
+    if ((w.SpeechRecognition || w.webkitSpeechRecognition) && !mirrorRef.current) {
+      // Language Mirror OFF → browser SpeechRecognition (its locale).
+      // Mirror ON → server compat engine (multi-locale, any language).
       setCompatMode(false);
       startRec();
     } else {
-      // no SpeechRecognition at all → straight into compat capture
+      // no SpeechRecognition (or mirror on) → straight into compat capture
       setCompatMode(true);
       void pcmStart();
     }
